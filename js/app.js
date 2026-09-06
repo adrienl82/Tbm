@@ -129,9 +129,3 @@ document.getElementById("favorite-toggle").addEventListener("click", () => {
 });
 
 showScreen("search");
-
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
-  });
-}
