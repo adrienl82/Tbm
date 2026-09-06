@@ -1,11 +1,3 @@
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# Buildozer / python-for-android build artifacts
-.buildozer/
-bin/
-
-# Local cache written by the app at runtime (stop list, favorites, ...)
-.cache/
+node_modules/
+*.log
+.DS_Store

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>TBM Temps Reel</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="icon" href="icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TBM" />
+    <meta name="theme-color" content="#0a3d62" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="screen-search">
+        <h1>TBM Temps Reel</h1>
+        <input id="search-input" type="search" placeholder="Rechercher un arret (ex: Quinconces)" />
+        <ul id="search-results" class="stop-list"></ul>
+        <button id="go-favorites" class="secondary">Mes favoris</button>
+      </section>
+
+      <section id="screen-board" hidden>
+        <header class="board-header">
+          <button id="back-from-board" class="link">&lt; Retour</button>
+          <h2 id="board-title"></h2>
+          <button id="favorite-toggle" class="link">&#9734; Ajouter aux favoris</button>
+        </header>
+        <p id="board-status" class="status"></p>
+        <ul id="board-passages" class="passage-list"></ul>
+      </section>
+
+      <section id="screen-favorites" hidden>
+        <header class="board-header">
+          <button id="back-from-favorites" class="link">&lt; Retour</button>
+          <h2>Mes favoris</h2>
+        </header>
+        <ul id="favorites-list" class="stop-list"></ul>
+      </section>
+    </main>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
