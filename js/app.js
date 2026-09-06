@@ -39,7 +39,7 @@ function passageRowElement(passage) {
 
   const dest = document.createElement("span");
   dest.className = "passage-destination";
-  dest.textContent = passage.destination;
+  dest.textContent = `→ ${passage.direction}`;
 
   const eta = document.createElement("span");
   eta.className = "passage-eta";
@@ -65,7 +65,7 @@ async function refreshBoard() {
   const statusEl = document.getElementById("board-status");
   const listEl = document.getElementById("board-passages");
   try {
-    const passages = await client.stopMonitoring(currentStop.ref);
+    const passages = await client.stopMonitoring(currentStop.refs);
     statusEl.textContent = passages.length ? "" : "Aucun passage prevu pour le moment";
     listEl.innerHTML = "";
     for (const passage of passages) {
@@ -100,7 +100,7 @@ async function renderFavorites() {
   const stops = await client.listStops();
   const byRef = new Map(stops.map((stop) => [stop.ref, stop]));
   for (const ref of favoriteRefs) {
-    const stop = byRef.get(ref) ?? { ref, name: ref };
+    const stop = byRef.get(ref) ?? { ref, name: ref, refs: [ref] };
     listEl.appendChild(stopRowElement(stop, openBoard));
   }
 }

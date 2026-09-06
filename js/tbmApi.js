@@ -35,6 +35,33 @@ export function parseStops(payload) {
   }));
 }
 
+// A named stop (e.g. "Quinconces") is really a cluster of physical stop
+// points -- one per platform/direction, sometimes a dozen+ on a big square.
+// Group them so the search only shows one row per name, keeping every
+// member ref so stopMonitoring() can query all of them and merge the
+// results. Points with no line at all are stale/decommissioned SAEIV
+// entries; drop them unless they're all a name has.
+export function groupStopsByName(stops) {
+  const byName = new Map();
+  for (const stop of stops) {
+    const key = stop.name.trim().toLowerCase();
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(stop);
+  }
+
+  const grouped = [];
+  for (const points of byName.values()) {
+    const active = points.filter((point) => point.lineRefs.length > 0);
+    const members = (active.length > 0 ? active : points).slice().sort((a, b) => a.ref.localeCompare(b.ref));
+    grouped.push({
+      ref: members[0].ref,
+      name: members[0].name,
+      refs: members.map((point) => point.ref),
+    });
+  }
+  return grouped;
+}
+
 export function parseLines(payload) {
   const refs = payload?.Siri?.LinesDelivery?.AnnotatedLineRef ?? [];
   const byRef = new Map();
@@ -62,14 +89,15 @@ export function parsePassages(payload, linesByRef) {
       const call = vehicleJourney.MonitoredCall ?? {};
       const lineRef = vehicleJourney.LineRef.value;
       const line = linesByRef.get(lineRef);
-      const destination =
-        firstValue(vehicleJourney.DestinationName) || firstValue(vehicleJourney.DirectionName, "?");
+      const direction = firstValue(vehicleJourney.DirectionName) || firstValue(vehicleJourney.DestinationName, "?");
+      const destination = firstValue(vehicleJourney.DestinationName) || direction;
       const aimedTime = parseTime(call.AimedArrivalTime);
       const expectedTime = parseTime(call.ExpectedArrivalTime);
       passages.push({
         lineRef,
         lineCode: line ? line.code : lineRef,
         lineName: line ? line.name : "",
+        direction,
         destination,
         aimedTime,
         expectedTime,
@@ -125,7 +153,7 @@ export class TbmClient {
     const payload = await this._cachedJson("tbm.cache.stops", STOPS_CACHE_TTL_MS, () =>
       this._get("stoppoints-discovery.json"),
     );
-    return parseStops(payload);
+    return groupStopsByName(parseStops(payload));
   }
 
   async searchStops(query, limit = 30) {
@@ -147,9 +175,33 @@ export class TbmClient {
     return this._linesByRef;
   }
 
-  async stopMonitoring(stopRef, limit = 10) {
+  // stopRefs is either a single physical stop ref or an array of them (a
+  // named stop's platforms, from a grouped Stop's `refs`). Results from all
+  // refs are merged into one time-sorted list; a failure on some refs
+  // doesn't hide the ones that answered.
+  async stopMonitoring(stopRefs, limit = 10) {
+    const refs = Array.isArray(stopRefs) ? stopRefs : [stopRefs];
     const linesByRef = await this._lines();
-    const payload = await this._get("stop-monitoring.json", { MonitoringRef: stopRef });
-    return parsePassages(payload, linesByRef).slice(0, limit);
+    const settled = await Promise.allSettled(
+      refs.map((ref) => this._get("stop-monitoring.json", { MonitoringRef: ref })),
+    );
+
+    const passages = [];
+    let lastError = null;
+    for (const result of settled) {
+      if (result.status !== "fulfilled") {
+        lastError = result.reason;
+        continue;
+      }
+      try {
+        passages.push(...parsePassages(result.value, linesByRef));
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (passages.length === 0 && lastError) throw lastError;
+
+    passages.sort((a, b) => (a.bestTime?.getTime() ?? Infinity) - (b.bestTime?.getTime() ?? Infinity));
+    return passages.slice(0, limit);
   }
 }

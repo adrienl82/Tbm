@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { TbmApiError, TbmClient, parseLines, parsePassages, parseStops } from "../js/tbmApi.js";
+import { TbmApiError, TbmClient, groupStopsByName, parseLines, parsePassages, parseStops } from "../js/tbmApi.js";
 
 const STOPS_PAYLOAD = {
   Siri: {
@@ -110,12 +110,79 @@ test("parsePassages resolves line metadata and computes the delay", () => {
   assert.equal(passage.lineCode, "A");
   assert.equal(passage.lineName, "Tram A");
   assert.equal(passage.destination, "Quatre Chemins");
+  assert.equal(passage.direction, "Quatre Chemins");
   assert.equal(passage.delayMinutes, 3);
   assert.equal(passage.bestTime.toISOString(), "2026-09-06T14:03:00.000Z");
 });
 
+test("parsePassages prefers DirectionName for direction but falls back to the destination", () => {
+  const lines = parseLines(LINES_PAYLOAD);
+  const payload = {
+    Siri: {
+      ServiceDelivery: {
+        StopMonitoringDelivery: [
+          {
+            Status: true,
+            MonitoredStopVisit: [
+              {
+                MonitoredVehicleJourney: {
+                  LineRef: { value: "bordeaux:Line:A:LOC" },
+                  DirectionName: [{ value: "Vers le centre" }],
+                  DestinationName: [{ value: "Quatre Chemins" }],
+                  MonitoredCall: {},
+                },
+              },
+              {
+                MonitoredVehicleJourney: {
+                  LineRef: { value: "bordeaux:Line:A:LOC" },
+                  DestinationName: [{ value: "Quatre Chemins" }],
+                  MonitoredCall: {},
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  const [withDirection, withoutDirection] = parsePassages(payload, lines);
+  assert.equal(withDirection.direction, "Vers le centre");
+  assert.equal(withoutDirection.direction, "Quatre Chemins");
+});
+
 test("parsePassages throws a TbmApiError when the API reports a failure", () => {
   assert.throws(() => parsePassages(MONITORING_ERROR_PAYLOAD, new Map()), TbmApiError);
+});
+
+test("groupStopsByName collapses same-name platforms into one entry", () => {
+  const stops = [
+    { ref: "b", name: "Quinconces", latitude: 0, longitude: 0, lineRefs: ["L2"] },
+    { ref: "a", name: "Quinconces", latitude: 0, longitude: 0, lineRefs: ["L60"] },
+    { ref: "c", name: "Quinconces", latitude: 0, longitude: 0, lineRefs: [] }, // decommissioned platform
+  ];
+  const groups = groupStopsByName(stops);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].name, "Quinconces");
+  assert.deepEqual(groups[0].refs, ["a", "b"]); // inactive "c" dropped, rest sorted by ref
+  assert.equal(groups[0].ref, "a");
+});
+
+test("groupStopsByName keeps inactive points when a name has no active ones", () => {
+  const stops = [{ ref: "x", name: "Depot ferme", latitude: 0, longitude: 0, lineRefs: [] }];
+  const groups = groupStopsByName(stops);
+  assert.deepEqual(groups[0].refs, ["x"]);
+});
+
+test("groupStopsByName keeps distinct names as separate entries", () => {
+  const stops = [
+    { ref: "a", name: "Quinconces", latitude: 0, longitude: 0, lineRefs: ["L2"] },
+    { ref: "b", name: "Gambetta", latitude: 0, longitude: 0, lineRefs: ["L2"] },
+  ];
+  const groups = groupStopsByName(stops);
+  assert.deepEqual(
+    groups.map((g) => g.name).sort(),
+    ["Gambetta", "Quinconces"],
+  );
 });
 
 test("TbmClient.searchStops is case-insensitive and caches the stop list", async () => {
@@ -150,4 +217,72 @@ test("TbmClient.stopMonitoring wires lines and stop-monitoring together", async 
   const passages = await client.stopMonitoring("bordeaux:StopPoint:BP:1:LOC");
   assert.equal(passages.length, 1);
   assert.equal(passages[0].lineCode, "A");
+});
+
+function monitoringPayloadFor(destination, isoTime) {
+  return {
+    Siri: {
+      ServiceDelivery: {
+        StopMonitoringDelivery: [
+          {
+            Status: true,
+            MonitoredStopVisit: [
+              {
+                MonitoredVehicleJourney: {
+                  LineRef: { value: "bordeaux:Line:A:LOC" },
+                  DestinationName: [{ value: destination }],
+                  MonitoredCall: { ExpectedArrivalTime: isoTime },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
+test("TbmClient.stopMonitoring merges and time-sorts passages across several platform refs", async () => {
+  const storage = new MemoryStorage();
+  const responsesByUrl = {
+    "lines-discovery.json": LINES_PAYLOAD,
+    a: monitoringPayloadFor("Later Terminus", "2026-09-06T15:00:00Z"),
+    b: monitoringPayloadFor("Earlier Terminus", "2026-09-06T14:00:00Z"),
+  };
+  const client = new TbmClient({
+    storage,
+    fetchImpl: async (url) => {
+      const key = url.includes("lines-discovery")
+        ? "lines-discovery.json"
+        : new URL(url).searchParams.get("MonitoringRef");
+      return { ok: true, json: async () => responsesByUrl[key] };
+    },
+  });
+
+  const passages = await client.stopMonitoring(["a", "b"]);
+  assert.deepEqual(
+    passages.map((p) => p.destination),
+    ["Earlier Terminus", "Later Terminus"],
+  );
+});
+
+test("TbmClient.stopMonitoring returns the refs that answered even if others fail", async () => {
+  const storage = new MemoryStorage();
+  const responsesByUrl = {
+    "lines-discovery.json": LINES_PAYLOAD,
+    good: monitoringPayloadFor("Quatre Chemins", "2026-09-06T14:00:00Z"),
+  };
+  const client = new TbmClient({
+    storage,
+    fetchImpl: async (url) => {
+      if (url.includes("lines-discovery")) return { ok: true, json: async () => LINES_PAYLOAD };
+      const ref = new URL(url).searchParams.get("MonitoringRef");
+      if (ref === "bad") throw new Error("network down");
+      return { ok: true, json: async () => responsesByUrl[ref] };
+    },
+  });
+
+  const passages = await client.stopMonitoring(["good", "bad"]);
+  assert.equal(passages.length, 1);
+  assert.equal(passages[0].destination, "Quatre Chemins");
 });
