@@ -60,9 +60,10 @@ section[hidden] {
   display: block;
   align-self: flex-start;
   margin: 16px 16px 8px;
-  padding: 0;
-  background: none;
+  padding: 8px 12px;
+  background: #ffffff;
   border: none;
+  border-radius: 8px;
   cursor: pointer;
   flex-shrink: 0;
 }

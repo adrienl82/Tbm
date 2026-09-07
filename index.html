@@ -14,6 +14,10 @@
 
       <section id="screen-search">
         <form id="search-form" method="get">
+          <div class="mode-filters">
+            <label><input type="checkbox" id="filter-tram" name="modes" value="tram" checked /> Tram</label>
+            <label><input type="checkbox" id="filter-bus" name="modes" value="bus" checked /> Bus</label>
+          </div>
           <input
             id="search-input"
             name="arret"
@@ -21,10 +25,6 @@
             autocomplete="off"
             placeholder="Rechercher un arret (ex: Quinconces)"
           />
-          <div class="mode-filters">
-            <label><input type="checkbox" id="filter-tram" name="modes" value="tram" checked /> Tram</label>
-            <label><input type="checkbox" id="filter-bus" name="modes" value="bus" checked /> Bus</label>
-          </div>
         </form>
         <ul id="search-results" class="stop-list"></ul>
         <button id="go-favorites" class="secondary">Mes favoris</button>
