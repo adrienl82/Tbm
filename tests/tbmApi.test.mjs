@@ -102,6 +102,28 @@ test("parseLines indexes lines by ref with their public code/name", () => {
   assert.equal(line.name, "Tram A");
 });
 
+test("parseLines classifies trams (single-letter code, name starting with Tram) vs everything else as bus", () => {
+  const payload = {
+    Siri: {
+      LinesDelivery: {
+        AnnotatedLineRef: [
+          { LineRef: { value: "tram-a" }, LineCode: { value: "A" }, LineName: [{ value: "Tram A" }] },
+          { LineRef: { value: "liane-2" }, LineCode: { value: "2" }, LineName: [{ value: "Lianes 2" }] },
+          // "Navette Tram 100": a rail-replacement shuttle BUS, despite the name -- multi-char code
+          { LineRef: { value: "navette-100" }, LineCode: { value: "100" }, LineName: [{ value: "Navette Tram 100" }] },
+          // "BUS EXPRESS G": single-letter code but not a tram
+          { LineRef: { value: "express-g" }, LineCode: { value: "G" }, LineName: [{ value: "BUS EXPRESS G" }] },
+        ],
+      },
+    },
+  };
+  const lines = parseLines(payload);
+  assert.equal(lines.get("tram-a").mode, "tram");
+  assert.equal(lines.get("liane-2").mode, "bus");
+  assert.equal(lines.get("navette-100").mode, "bus");
+  assert.equal(lines.get("express-g").mode, "bus");
+});
+
 test("parsePassages resolves line metadata and computes the delay", () => {
   const lines = parseLines(LINES_PAYLOAD);
   const passages = parsePassages(MONITORING_PAYLOAD, lines);
@@ -185,6 +207,15 @@ test("groupStopsByName keeps distinct names as separate entries", () => {
   );
 });
 
+test("groupStopsByName unions the lineRefs served across a name's platforms", () => {
+  const stops = [
+    { ref: "a", name: "Quinconces", latitude: 0, longitude: 0, lineRefs: ["tram-a"] },
+    { ref: "b", name: "Quinconces", latitude: 0, longitude: 0, lineRefs: ["liane-2", "tram-a"] },
+  ];
+  const [group] = groupStopsByName(stops);
+  assert.deepEqual(group.lineRefs.sort(), ["liane-2", "tram-a"]);
+});
+
 test("TbmClient.searchStops is case-insensitive and caches the stop list", async () => {
   const storage = new MemoryStorage();
   let calls = 0;
@@ -204,6 +235,61 @@ test("TbmClient.searchStops is case-insensitive and caches the stop list", async
 
   await client.listStops(); // should be served from cache, not the network
   assert.equal(calls, 1);
+});
+
+test("TbmClient.searchStops filters by transport mode", async () => {
+  const stopsPayload = {
+    Siri: {
+      StopPointsDelivery: {
+        AnnotatedStopPointRef: [
+          {
+            StopPointRef: { value: "tram-stop" },
+            StopName: { value: "Quinconces" },
+            Location: {},
+            Lines: [{ value: "tram-a" }],
+          },
+          {
+            StopPointRef: { value: "bus-stop" },
+            StopName: { value: "Quatre Chemins" },
+            Location: {},
+            Lines: [{ value: "liane-2" }],
+          },
+        ],
+      },
+    },
+  };
+  const linesPayload = {
+    Siri: {
+      LinesDelivery: {
+        AnnotatedLineRef: [
+          { LineRef: { value: "tram-a" }, LineCode: { value: "A" }, LineName: [{ value: "Tram A" }] },
+          { LineRef: { value: "liane-2" }, LineCode: { value: "2" }, LineName: [{ value: "Lianes 2" }] },
+        ],
+      },
+    },
+  };
+  const client = new TbmClient({
+    storage: new MemoryStorage(),
+    fetchImpl: async (url) => ({
+      ok: true,
+      json: async () => (url.includes("lines-discovery") ? linesPayload : stopsPayload),
+    }),
+  });
+
+  const tramOnly = await client.searchStops("qu", { modes: ["tram"] });
+  assert.deepEqual(tramOnly.map((s) => s.name), ["Quinconces"]);
+
+  const busOnly = await client.searchStops("qu", { modes: ["bus"] });
+  assert.deepEqual(busOnly.map((s) => s.name), ["Quatre Chemins"]);
+
+  const both = await client.searchStops("qu", { modes: ["tram", "bus"] });
+  assert.deepEqual(
+    both.map((s) => s.name).sort(),
+    ["Quatre Chemins", "Quinconces"],
+  );
+
+  const unfiltered = await client.searchStops("qu");
+  assert.equal(unfiltered.length, 2);
 });
 
 test("TbmClient.stopMonitoring wires lines and stop-monitoring together", async () => {

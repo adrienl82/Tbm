@@ -51,10 +51,19 @@ function passageRowElement(passage) {
   return li;
 }
 
+function selectedModes() {
+  const tram = document.getElementById("filter-tram").checked;
+  const bus = document.getElementById("filter-bus").checked;
+  if (tram && bus) return null; // both selected == no filtering
+  if (tram) return ["tram"];
+  if (bus) return ["bus"];
+  return null; // neither: shouldn't happen, at least one stays checked
+}
+
 async function runSearch(query) {
   const resultsEl = document.getElementById("search-results");
   resultsEl.innerHTML = "";
-  const stops = await client.searchStops(query);
+  const stops = await client.searchStops(query, { modes: selectedModes() });
   for (const stop of stops) {
     resultsEl.appendChild(stopRowElement(stop, openBoard));
   }
@@ -108,6 +117,18 @@ async function renderFavorites() {
 document.getElementById("search-input").addEventListener("input", (event) => {
   runSearch(event.target.value);
 });
+
+for (const id of ["filter-tram", "filter-bus"]) {
+  document.getElementById(id).addEventListener("change", (event) => {
+    const noneChecked =
+      !document.getElementById("filter-tram").checked && !document.getElementById("filter-bus").checked;
+    if (noneChecked) {
+      event.target.checked = true; // keep at least one mode selected
+      return;
+    }
+    runSearch(document.getElementById("search-input").value);
+  });
+}
 
 document.getElementById("back-from-board").addEventListener("click", () => {
   if (refreshTimer) clearInterval(refreshTimer);

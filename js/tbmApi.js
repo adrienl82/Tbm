@@ -57,9 +57,18 @@ export function groupStopsByName(stops) {
       ref: members[0].ref,
       name: members[0].name,
       refs: members.map((point) => point.ref),
+      lineRefs: [...new Set(members.flatMap((point) => point.lineRefs))],
     });
   }
   return grouped;
+}
+
+// SIRI-Lite has no explicit transport-mode field, so mode is inferred from
+// the line's own name/code: TBM's 6 tram lines are named "Tram A".."Tram F"
+// with a single-letter code -- everything else (Lianes, night buses, Flex,
+// "Navette Tram" rail-replacement buses, boats...) is bucketed as "bus".
+function lineMode(name, code) {
+  return /^tram\b/i.test(name) && /^[a-f]$/i.test(code) ? "tram" : "bus";
 }
 
 export function parseLines(payload) {
@@ -67,11 +76,9 @@ export function parseLines(payload) {
   const byRef = new Map();
   for (const entry of refs) {
     const ref = entry.LineRef.value;
-    byRef.set(ref, {
-      ref,
-      code: entry.LineCode?.value ?? "",
-      name: firstValue(entry.LineName),
-    });
+    const code = entry.LineCode?.value ?? "";
+    const name = firstValue(entry.LineName);
+    byRef.set(ref, { ref, code, name, mode: lineMode(name, code) });
   }
   return byRef;
 }
@@ -97,6 +104,7 @@ export function parsePassages(payload, linesByRef) {
         lineRef,
         lineCode: line ? line.code : lineRef,
         lineName: line ? line.name : "",
+        mode: line ? line.mode : "bus",
         direction,
         destination,
         aimedTime,
@@ -156,14 +164,22 @@ export class TbmClient {
     return groupStopsByName(parseStops(payload));
   }
 
-  async searchStops(query, limit = 30) {
+  // modes, when given, keeps only stops served by at least one line in that
+  // set (e.g. ["tram"] or ["bus"]). Omit it (or pass both) to not filter.
+  async searchStops(query, { limit = 30, modes = null } = {}) {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
-    const stops = await this.listStops();
-    return stops
-      .filter((stop) => stop.name.toLowerCase().includes(needle))
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .slice(0, limit);
+    let stops = await this.listStops();
+    stops = stops.filter((stop) => stop.name.toLowerCase().includes(needle));
+
+    if (modes && modes.length > 0) {
+      const linesByRef = await this._lines();
+      stops = stops.filter((stop) =>
+        stop.lineRefs.some((ref) => modes.includes(linesByRef.get(ref)?.mode)),
+      );
+    }
+
+    return stops.sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit);
   }
 
   async _lines() {
