@@ -87,7 +87,9 @@ async function refreshBoard() {
   const statusEl = document.getElementById("board-status");
   const listEl = document.getElementById("board-passages");
   try {
-    const passages = await client.stopMonitoring(currentStop.refs);
+    let passages = await client.stopMonitoring(currentStop.refs);
+    const modes = selectedModes();
+    if (modes) passages = passages.filter((passage) => modes.includes(passage.mode));
     statusEl.textContent = passages.length ? "" : "Aucun passage prevu pour le moment";
     listEl.innerHTML = "";
     for (const passage of passages) {
@@ -149,8 +151,14 @@ for (const id of ["filter-tram", "filter-bus"]) {
       event.target.checked = true; // keep at least one mode selected
       return;
     }
-    syncUrl();
-    runSearch(document.getElementById("search-input").value);
+    // The filter is shared across screens: re-render whichever one is showing.
+    if (!screens.board.hidden) {
+      syncUrl(currentStop.ref);
+      refreshBoard();
+    } else {
+      syncUrl();
+      runSearch(document.getElementById("search-input").value);
+    }
   });
 }
 

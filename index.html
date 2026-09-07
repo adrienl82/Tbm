@@ -12,12 +12,17 @@
         <img src="img/tbm-logo.png" alt="TBM Temps Reel" />
       </button>
 
+      <!-- form="search-form" keeps these part of the search form's GET
+           encoding even though they're placed outside it, so the filter
+           stays visible and usable from every screen (search, board,
+           favorites), not just above the search results. -->
+      <div class="mode-filters">
+        <label><input type="checkbox" id="filter-tram" name="modes" value="tram" form="search-form" checked /> Tram</label>
+        <label><input type="checkbox" id="filter-bus" name="modes" value="bus" form="search-form" checked /> Bus</label>
+      </div>
+
       <section id="screen-search">
         <form id="search-form" method="get">
-          <div class="mode-filters">
-            <label><input type="checkbox" id="filter-tram" name="modes" value="tram" checked /> Tram</label>
-            <label><input type="checkbox" id="filter-bus" name="modes" value="bus" checked /> Bus</label>
-          </div>
           <input
             id="search-input"
             name="arret"
