@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { boundsFromPoints, boundsOverlap, isValidCoordinate } from "../js/geoBounds.js";
+import { boundsFromPoints, boundsOverlap, isValidCoordinate, shapeCoversStops } from "../js/geoBounds.js";
 
 test("isValidCoordinate accepts a real Bordeaux point", () => {
   assert.equal(isValidCoordinate(44.84, -0.57), true);
@@ -53,4 +53,50 @@ test("boundsOverlap returns false when either box is missing", () => {
   const a = { minLat: 44.8, maxLat: 44.9, minLon: -0.6, maxLon: -0.5 };
   assert.equal(boundsOverlap(a, null), false);
   assert.equal(boundsOverlap(null, a), false);
+});
+
+test("shapeCoversStops is true when the shape passes near most stops", () => {
+  const shape = [
+    [44.84, -0.58],
+    [44.85, -0.57],
+    [44.86, -0.56],
+  ];
+  const stops = [
+    [44.8401, -0.5799], // a few meters from a shape point
+    [44.8501, -0.5701],
+    [44.8599, -0.5601],
+  ];
+  assert.equal(shapeCoversStops(shape, stops), true);
+});
+
+test("shapeCoversStops is false when the shape is an unrelated route", () => {
+  // Bordeaux Metropole's open data sometimes tags a "principal" shape with
+  // the wrong line entirely -- a route clear across town whose bounding box
+  // can still overlap or nest inside the real one, which is exactly why this
+  // check looks at actual stop proximity instead of bounding boxes.
+  const shape = [
+    [44.87, -0.48],
+    [44.88, -0.49],
+  ];
+  const stops = [
+    [44.80, -0.65],
+    [44.79, -0.64],
+    [44.81, -0.66],
+  ];
+  assert.equal(shapeCoversStops(shape, stops), false);
+});
+
+test("shapeCoversStops honors a custom threshold and minimum fraction", () => {
+  const shape = [[44.84, -0.58]];
+  const stops = [
+    [44.8401, -0.5799], // ~15m away
+    [44.90, -0.60], // far away
+  ];
+  assert.equal(shapeCoversStops(shape, stops, { thresholdMeters: 50, minFraction: 0.5 }), true);
+  assert.equal(shapeCoversStops(shape, stops, { thresholdMeters: 50, minFraction: 0.9 }), false);
+});
+
+test("shapeCoversStops returns false for empty inputs", () => {
+  assert.equal(shapeCoversStops([], [[44.84, -0.58]]), false);
+  assert.equal(shapeCoversStops([[44.84, -0.58]], []), false);
 });

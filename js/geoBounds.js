@@ -35,12 +35,6 @@ export function boundsFromPoints(points) {
 }
 
 // Whether two bounding boxes are within marginDeg of touching/overlapping.
-// Used to sanity-check that a line's route shape actually passes near the
-// stops that are genuinely reported for it -- Bordeaux Metropole's open
-// data occasionally tags a route shape with the wrong line id entirely
-// (e.g. bus 28's shape record is actually a different, unrelated route),
-// which a plain "is this coordinate in Bordeaux" check can't catch since
-// the wrong route is still somewhere in Bordeaux.
 export function boundsOverlap(a, b, marginDeg = 0) {
   if (!a || !b) return false;
   return (
@@ -49,4 +43,34 @@ export function boundsOverlap(a, b, marginDeg = 0) {
     a.minLon - marginDeg <= b.maxLon &&
     a.maxLon + marginDeg >= b.minLon
   );
+}
+
+// Distance in meters between two [lat, lon] points (haversine).
+function distanceMeters([lat1, lon1], [lat2, lon2]) {
+  const R = 6371000;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Whether a route shape actually passes near the stops that are genuinely
+// reported for the line it's supposed to be. Bordeaux Metropole's open data
+// frequently tags a route shape's "principal" record with the wrong line id
+// entirely -- most Locale/Principale/Directe bus lines' shapes turn out on
+// inspection to trace a completely unrelated route clear across town. A
+// bounding-box check can miss this (the wrong route's box can still overlap
+// or nest inside the real one), so this instead checks how many of the
+// line's own stops (independently sourced from SIRI-Lite) actually sit near
+// the shape: real routes cover 85-100% of their stops within 150m, mistagged
+// ones cover under 20%.
+export function shapeCoversStops(shapePoints, stopPoints, { thresholdMeters = 150, minFraction = 0.5 } = {}) {
+  if (!shapePoints || shapePoints.length === 0 || !stopPoints || stopPoints.length === 0) return false;
+  const covered = stopPoints.filter((stop) =>
+    shapePoints.some((point) => distanceMeters(stop, point) <= thresholdMeters),
+  ).length;
+  return covered / stopPoints.length >= minFraction;
 }

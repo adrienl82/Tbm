@@ -2,16 +2,7 @@ import { TbmClient } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
 import { fetchVehiclePositions } from "./vehiclePositions.js";
-import { boundsFromPoints, boundsOverlap } from "./geoBounds.js";
-
-// How far a route shape's bounding box may sit from its own stops' bounding
-// box and still be trusted (degrees). Bordeaux Metropole's open data
-// occasionally tags a route shape with the wrong line id entirely (e.g. bus
-// 28's "principal" shape is actually an unrelated route clear across town);
-// stops are sourced independently (each stop's own reported lines, from
-// SIRI-Lite) and have proven reliable, so they're the ground truth this
-// checks the shape against.
-const SHAPE_STOPS_MARGIN_DEG = 0.03;
+import { shapeCoversStops } from "./geoBounds.js";
 
 const REFRESH_INTERVAL_MS = 30000; // matches TBM's own real-time refresh rate
 const DEFAULT_LINE_COLOR = "#0a3d62";
@@ -354,18 +345,16 @@ async function openLineMap(passage) {
     console.error("Impossible de charger les arrets de la ligne :", err);
   }
   const stopPoints = stops.map((stop) => [stop.latitude, stop.longitude]);
-  const stopsBounds = boundsFromPoints(stopPoints);
 
   let routeBounds = [];
   try {
     const shapes = await fetchLineShapes(passage.lineRef);
     const shapePoints = shapes.flatMap((shape) => shape.latLngs);
-    const shapeBounds = boundsFromPoints(shapePoints);
-    // Bordeaux Metropole's open data occasionally tags a route shape with
-    // the wrong line id -- if it doesn't even pass near this line's own
-    // stops, it's not this line's route: skip drawing it rather than show
-    // a confidently wrong path.
-    if (shapes.length > 0 && !boundsOverlap(stopsBounds, shapeBounds, SHAPE_STOPS_MARGIN_DEG)) {
+    // Bordeaux Metropole's open data frequently tags a route shape with the
+    // wrong line id -- if it doesn't actually pass near most of this line's
+    // own stops, it's not this line's route: skip drawing it rather than
+    // show a confidently wrong path.
+    if (shapes.length > 0 && !shapeCoversStops(shapePoints, stopPoints)) {
       statusEl.textContent = "Trace indisponible pour cette ligne";
     } else {
       for (const shape of shapes) {
