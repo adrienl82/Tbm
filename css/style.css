@@ -6,6 +6,8 @@
   --muted: #6b7280;
   --accent: #0a3d62;
   --border: #e2e5ea;
+  --danger-bg: #fdecea;
+  --danger-text: #a12622;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -16,6 +18,8 @@
     --muted: #9aa1ac;
     --accent: #4da3ff;
     --border: #2a2f3a;
+    --danger-bg: #3a1614;
+    --danger-text: #ff8a80;
   }
 }
 
@@ -233,6 +237,18 @@ ul {
 .status {
   color: var(--muted);
   text-align: center;
+}
+
+/* Shown below the map when several vehicles on the line have been stalled
+   for a while -- a plain .status (muted/centered) doesn't stand out enough
+   for something worth the user's attention. */
+.status.incident {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-weight: 600;
 }
 
 #line-map {

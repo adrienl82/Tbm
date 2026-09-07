@@ -3,7 +3,13 @@ import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
 import { fetchVehiclePositions } from "./vehiclePositions.js";
 import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
-import { distanceToStopAhead, estimateVehiclePosition, lerpLatLng } from "./vehicleMotion.js";
+import {
+  distanceToStopAhead,
+  estimateVehiclePosition,
+  isStalled,
+  lerpLatLng,
+  trackStalledSince,
+} from "./vehicleMotion.js";
 
 const REFRESH_INTERVAL_MS = 10000; // TBM's own feed updates roughly every 10-30s
 const DEFAULT_LINE_COLOR = "#0a3d62";
@@ -15,6 +21,15 @@ const DEFAULT_LINE_COLOR = "#0a3d62";
 // catch. A real Tram A vehicle checked against Tram A's own 89 stops never
 // exceeded ~350m; a mistagged one is typically several kilometers off.
 const VEHICLE_STOP_DISTANCE_METERS = 1000;
+
+// How long a vehicle must have been continuously stopped (not just at this
+// instant's fix, but across every refresh since we first noticed) before
+// it's flagged as stalled rather than just "waiting at a stop".
+const STALLED_THRESHOLD_MS = 5 * 60 * 1000;
+// More than this many stalled vehicles on one line at once reads as a
+// service problem rather than ordinary traffic/dwell delays.
+const LINE_INCIDENT_THRESHOLD = 3;
+const STALLED_COLOR = "#dc2626";
 
 const client = new TbmClient();
 const favorites = new FavoritesStore();
@@ -328,13 +343,17 @@ function ensureLineMap() {
 // A small circular badge with a single letter ("T" for tram, "B" for bus),
 // distinct from the smaller plain dots used for stops. Moving vehicles get
 // a pulsing halo (a common "live" indicator); a stopped one is shown dimmed
-// with no pulse, so the two states are visually distinct at a glance.
+// with no pulse, so the two states are visually distinct at a glance. A
+// vehicle stopped long enough to count as stalled (see refreshVehicles)
+// turns red regardless of its line's own color, and stays at full opacity
+// so it stands out rather than fading into the dimmed "stopped" look.
 // Tapping a marker follows it (see refreshVehicles/animateVehicles);
 // is-followed adds a visible ring so it's clear which one that is.
-function vehicleDivIcon(letter, color, moving, followed) {
+function vehicleDivIcon(letter, color, moving, followed, stalled) {
+  const badgeColor = stalled ? STALLED_COLOR : color;
   return L.divIcon({
-    className: `vehicle-marker ${moving ? "is-moving" : "is-stopped"}${followed ? " is-followed" : ""}`,
-    html: `<div class="vehicle-pulse" style="background:${color}"></div><div class="vehicle-badge" style="background:${color}">${letter}</div>`,
+    className: `vehicle-marker ${moving ? "is-moving" : "is-stopped"}${followed ? " is-followed" : ""}${stalled ? " is-stalled" : ""}`,
+    html: `<div class="vehicle-pulse" style="background:${badgeColor}"></div><div class="vehicle-badge" style="background:${badgeColor}">${letter}</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });
@@ -349,7 +368,9 @@ function formatTime(date) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function vehicleTooltip(vehicle, fallbackLabel) {
+// isStalled/stalledSince come from refreshVehicles' cross-refresh tracking
+// (see there) of how long this vehicle has been continuously stopped.
+function vehicleTooltip(vehicle, fallbackLabel, vehicleIsStalled, stalledSince) {
   const title = vehicle.label || fallbackLabel;
   const stopName = vehicle.stopId ? currentStopNames.get(vehicle.stopId) : null;
   const time = vehicle.timestamp ? formatTime(vehicle.timestamp) : null;
@@ -362,7 +383,8 @@ function vehicleTooltip(vehicle, fallbackLabel) {
     detail = parts.join(" - ");
   }
   const idLine = vehicle.id ? `<br>vehicule ${vehicle.id}` : "";
-  return `${title}<br>${detail}${idLine}${time ? `<br>${time}` : ""}`;
+  const stalledLine = vehicleIsStalled ? `<br>bloque depuis ${Math.floor((Date.now() - stalledSince) / 60000)} min` : "";
+  return `${title}<br>${detail}${idLine}${stalledLine}${time ? `<br>${time}` : ""}`;
 }
 
 // How long a marker takes to ease from wherever it was displayed (its
@@ -385,9 +407,24 @@ function setFollowedVehicle(id) {
   for (const entry of activeVehicles) {
     if (entry.vehicle.id !== previousId && entry.vehicle.id !== followedVehicleId) continue;
     const isFollowed = entry.vehicle.id === followedVehicleId;
-    entry.marker.setIcon(vehicleDivIcon(letter, color, entry.vehicle.moving, isFollowed));
+    entry.marker.setIcon(vehicleDivIcon(letter, color, entry.vehicle.moving, isFollowed, entry.isStalled));
     if (isFollowed) entry.marker.openTooltip();
   }
+}
+
+// Shows/hides the below-the-map incident notice based on how many vehicles
+// on the currently open line have been stalled (see refreshVehicles) at
+// once -- more than LINE_INCIDENT_THRESHOLD reads as a service problem
+// rather than ordinary traffic or dwell delays.
+function updateLineIncidentStatus(stalledCount) {
+  const el = document.getElementById("line-incident");
+  if (stalledCount <= LINE_INCIDENT_THRESHOLD) {
+    el.hidden = true;
+    return;
+  }
+  const vehicleWord = currentLinePassage?.mode === "tram" ? "trams" : "bus";
+  el.textContent = `Possible incident sur la ligne : ${stalledCount} ${vehicleWord} sont actuellement a l'arret depuis plus de 5 minutes.`;
+  el.hidden = false;
 }
 
 async function refreshVehicles(passage) {
@@ -419,9 +456,17 @@ async function refreshVehicles(passage) {
         continue;
       }
       const isFollowed = Boolean(vehicle.id) && vehicle.id === followedVehicleId;
-      const icon = vehicleDivIcon(letter, color, vehicle.moving, isFollowed);
       const previous = vehicle.id ? previousById.get(vehicle.id) : null;
       if (vehicle.id) seenIds.add(vehicle.id);
+
+      // How long this vehicle has been continuously stopped, carried
+      // forward across refreshes (matched by id) rather than reset every
+      // time -- a single fix's timestamp only says when it was last
+      // observed, not how long it's actually been sitting there.
+      const stalledSince = trackStalledSince(vehicle.moving, previous?.stalledSince ?? null, Date.now());
+      const vehicleIsStalled = isStalled(stalledSince, Date.now(), STALLED_THRESHOLD_MS);
+
+      const icon = vehicleDivIcon(letter, color, vehicle.moving, isFollowed, vehicleIsStalled);
 
       let marker;
       let transition = null;
@@ -434,14 +479,18 @@ async function refreshVehicles(passage) {
         const current = marker.getLatLng();
         transition = { from: [current.lat, current.lng], start: Date.now() };
         marker.setIcon(icon);
-        marker.setTooltipContent(vehicleTooltip(vehicle, label));
+        marker.setTooltipContent(vehicleTooltip(vehicle, label, vehicleIsStalled, stalledSince));
       } else {
         marker = L.marker([vehicle.latitude, vehicle.longitude], { icon })
           // A fixed direction (rather than Leaflet's default "auto", which
           // picks left/right based on space around the marker) matters most
           // for a followed vehicle: it sits pinned at the map's center, so
           // "auto" would otherwise flip sides on the smallest jitter.
-          .bindTooltip(vehicleTooltip(vehicle, label), { direction: "top", offset: [0, -14], className: "vehicle-tooltip" })
+          .bindTooltip(vehicleTooltip(vehicle, label, vehicleIsStalled, stalledSince), {
+            direction: "top",
+            offset: [0, -14],
+            className: "vehicle-tooltip",
+          })
           .addTo(vehicleLayer);
         if (vehicle.id) {
           marker.on("click", () => setFollowedVehicle(vehicle.id));
@@ -455,6 +504,8 @@ async function refreshVehicles(passage) {
         vehicle,
         marker,
         transition,
+        stalledSince,
+        isStalled: vehicleIsStalled,
         // Distance to the line's own closest stop actually ahead of this
         // vehicle at this last known fix -- animateVehicles() uses it so a
         // fast vehicle's estimated position never creeps past a stop it's
@@ -475,6 +526,7 @@ async function refreshVehicles(passage) {
     }
 
     activeVehicles = nextActiveVehicles;
+    updateLineIncidentStatus(nextActiveVehicles.filter((entry) => entry.isStalled).length);
   } catch (err) {
     console.error("Impossible de charger les positions des vehicules :", err);
   }
@@ -555,6 +607,7 @@ async function openLineMap(passage) {
   document.getElementById("map-title").textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
   const statusEl = document.getElementById("map-status");
   statusEl.textContent = "";
+  document.getElementById("line-incident").hidden = true;
   // The line list opens the map straight from search; a passage badge opens
   // it from the board. "Retour" should go back to whichever that was.
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";

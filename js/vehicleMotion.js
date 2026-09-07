@@ -222,3 +222,22 @@ export function lerpLatLng(from, to, t) {
   const clamped = Math.max(0, Math.min(1, t));
   return [from[0] + (to[0] - from[0]) * clamped, from[1] + (to[1] - from[1]) * clamped];
 }
+
+// Tracks how long a vehicle has been continuously stopped across refreshes.
+// A single fix's own timestamp only says when it was last observed, not how
+// long it's actually been sitting there, so this instead carries the
+// timestamp forward from the same vehicle's previous refresh (matched by
+// id) for as long as it stays stopped, resetting to null the moment it
+// moves again. previousStalledSince is that prior value, or null if it
+// wasn't stopped then (or this is the first time this vehicle's been seen).
+export function trackStalledSince(moving, previousStalledSince, nowMs) {
+  if (moving) return null;
+  return previousStalledSince ?? nowMs;
+}
+
+// Whether a vehicle tracked as stopped since stalledSince (see
+// trackStalledSince) has been stopped long enough to count as stalled
+// rather than just waiting at a stop.
+export function isStalled(stalledSince, nowMs, thresholdMs) {
+  return stalledSince !== null && nowMs - stalledSince >= thresholdMs;
+}

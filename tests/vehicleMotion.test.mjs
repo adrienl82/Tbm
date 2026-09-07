@@ -6,9 +6,11 @@ import {
   destinationPoint,
   distanceToStopAhead,
   estimateVehiclePosition,
+  isStalled,
   lerpLatLng,
   pointAtDistanceAlong,
   projectOntoPolyline,
+  trackStalledSince,
 } from "../js/vehicleMotion.js";
 import { distanceMeters } from "../js/geoBounds.js";
 
@@ -243,4 +245,27 @@ test("lerpLatLng blends proportionally in between", () => {
 test("lerpLatLng clamps t outside [0, 1]", () => {
   assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], -1), [44.8, -0.6]);
   assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], 5), [44.9, -0.5]);
+});
+
+test("trackStalledSince returns null while the vehicle is moving", () => {
+  assert.equal(trackStalledSince(true, 12345, 99999), null);
+  assert.equal(trackStalledSince(true, null, 99999), null);
+});
+
+test("trackStalledSince starts the clock the first time a stopped vehicle is seen", () => {
+  assert.equal(trackStalledSince(false, null, 1000), 1000);
+});
+
+test("trackStalledSince carries the same start time forward while still stopped", () => {
+  assert.equal(trackStalledSince(false, 1000, 5000), 1000);
+});
+
+test("isStalled is false until the threshold is reached, true after", () => {
+  assert.equal(isStalled(1000, 1000 + 4 * 60 * 1000, 5 * 60 * 1000), false);
+  assert.equal(isStalled(1000, 1000 + 5 * 60 * 1000, 5 * 60 * 1000), true);
+  assert.equal(isStalled(1000, 1000 + 6 * 60 * 1000, 5 * 60 * 1000), true);
+});
+
+test("isStalled is false for a vehicle that isn't tracked as stopped", () => {
+  assert.equal(isStalled(null, 999999, 5 * 60 * 1000), false);
 });
