@@ -136,6 +136,7 @@ test("fetchLineShapes queries the open data API by the line's numeric id", async
   const parsed = new URL(requestedUrl);
   assert.equal(parsed.searchParams.get("dataset"), "sv_chem_l");
   assert.equal(parsed.searchParams.get("refine.rs_sv_ligne_a"), "59");
+  assert.equal(parsed.searchParams.get("refine.principal"), "True");
 });
 
 test("fetchLineShapes returns an empty list when the line ref can't be parsed", async () => {

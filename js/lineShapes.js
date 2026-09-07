@@ -53,6 +53,11 @@ export async function fetchLineShapes(lineRef, { fetchImpl = null } = {}) {
   const url = new URL(BASE_URL);
   url.searchParams.set("dataset", DATASET);
   url.searchParams.set("refine.rs_sv_ligne_a", id);
+  // This dataset otherwise returns every stop-to-stop pair combination on
+  // the line (not just consecutive ones), including ones that stray onto
+  // a completely different line's real destinations -- "principal" is the
+  // dataset's own flag for the actual route shape.
+  url.searchParams.set("refine.principal", "True");
   url.searchParams.set("rows", "1000");
 
   const response = await fetcher(url.toString());
