@@ -72,6 +72,16 @@ export function groupStopsByName(stops) {
   return grouped;
 }
 
+// Bare numeric id embedded in a SIRI stop ref, e.g.
+// "bordeaux:StopPoint:BP:4970:LOC" -> "4970". This is the same id the
+// GTFS-RT vehicle positions feed reports as a vehicle's current/next
+// stop_id, letting the live map name that stop using data already fetched
+// from SIRI rather than a separate lookup.
+export function stopNumericId(stopRef) {
+  const match = /^bordeaux:StopPoint:\w+:(\w+):LOC$/.exec(stopRef ?? "");
+  return match ? match[1] : null;
+}
+
 // SIRI-Lite has no explicit transport-mode field, so mode is inferred from
 // the line's own name/code: TBM's 6 tram lines are named "Tram A".."Tram F"
 // with a single-letter code -- everything else (Lianes, night buses, Flex,

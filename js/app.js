@@ -1,4 +1,4 @@
-import { TbmClient } from "./tbmApi.js";
+import { TbmClient, stopNumericId } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
 import { fetchVehiclePositions } from "./vehiclePositions.js";
@@ -276,6 +276,7 @@ let currentLinePassage = null;
 let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
+let currentStopNames = new Map();
 
 function ensureLineMap() {
   if (lineMap) return lineMap;
@@ -303,6 +304,21 @@ function vehicleDivIcon(letter, color, moving) {
   });
 }
 
+// Builds the vehicle's tooltip: its destination, then either its speed and
+// where it's headed (moving) or which stop it's sitting at (stopped) --
+// whichever of those is actually known, since stop_id doesn't always
+// resolve to a stop this line's own list has a name for.
+function vehicleTooltip(vehicle, fallbackLabel) {
+  const title = vehicle.label || fallbackLabel;
+  const stopName = vehicle.stopId ? currentStopNames.get(vehicle.stopId) : null;
+  if (!vehicle.moving) {
+    return `${title}<br>a l'arret${stopName ? ` : ${stopName}` : ""}`;
+  }
+  const parts = [stopName ? `vers ${stopName}` : "en circulation"];
+  if (vehicle.speedKmh !== null) parts.push(`${vehicle.speedKmh} km/h`);
+  return `${title}<br>${parts.join(" - ")}`;
+}
+
 async function refreshVehicles(passage) {
   if (!passage || !vehicleLayer) return;
   const letter = passage.mode === "tram" ? "T" : "B";
@@ -314,7 +330,7 @@ async function refreshVehicles(passage) {
     for (const vehicle of vehicles) {
       const icon = vehicleDivIcon(letter, color, vehicle.moving);
       L.marker([vehicle.latitude, vehicle.longitude], { icon })
-        .bindTooltip(`${vehicle.label || label}${vehicle.moving ? "" : " (a l'arret)"}`)
+        .bindTooltip(vehicleTooltip(vehicle, label))
         .addTo(vehicleLayer);
     }
   } catch (err) {
@@ -384,6 +400,9 @@ async function openLineMap(passage) {
     console.error("Impossible de charger les arrets de la ligne :", err);
   }
   const stopPoints = stops.map((stop) => [stop.latitude, stop.longitude]);
+  currentStopNames = new Map(
+    stops.map((stop) => [stopNumericId(stop.ref), stop.name]).filter(([id]) => id !== null),
+  );
 
   let routeBounds = [];
   try {

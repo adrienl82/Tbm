@@ -73,6 +73,30 @@ test("parseVehiclePositions defaults to moving when current_status is absent", (
   assert.equal(parseVehiclePositions(decoded, "59")[0].moving, true);
 });
 
+test("parseVehiclePositions exposes speed in km/h and the current stop id when present", () => {
+  const decoded = decodedWith([
+    {
+      vehicle: {
+        trip: { routeId: "59" },
+        position: { latitude: 44.84, longitude: -0.57, speed: 10 },
+        stopId: "9717",
+      },
+    },
+  ]);
+  const [vehicle] = parseVehiclePositions(decoded, "59");
+  assert.equal(vehicle.speedKmh, 36);
+  assert.equal(vehicle.stopId, "9717");
+});
+
+test("parseVehiclePositions defaults speed and stop id to null when absent", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 } } },
+  ]);
+  const [vehicle] = parseVehiclePositions(decoded, "59");
+  assert.equal(vehicle.speedKmh, null);
+  assert.equal(vehicle.stopId, null);
+});
+
 test("parseVehiclePositions falls back to the trip id when the vehicle has no id", () => {
   const decoded = decodedWith([
     { vehicle: { trip: { routeId: "59", tripId: "trip-1" }, position: { latitude: 44.84, longitude: -0.57 } } },

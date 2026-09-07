@@ -40,6 +40,7 @@ message Position {
   required float latitude = 1;
   required float longitude = 2;
   optional float bearing = 3;
+  optional float speed = 5;
 }
 
 enum VehicleStopStatus {
@@ -53,6 +54,7 @@ message VehiclePosition {
   optional VehicleDescriptor vehicle = 8;
   optional Position position = 2;
   optional VehicleStopStatus current_status = 4 [default = IN_TRANSIT_TO];
+  optional string stop_id = 7;
   optional uint64 timestamp = 5;
 }
 `;
@@ -91,6 +93,8 @@ export function parseVehiclePositions(decoded, routeId) {
       latitude: position.latitude,
       longitude: position.longitude,
       bearing: typeof position.bearing === "number" ? position.bearing : null,
+      speedKmh: typeof position.speed === "number" ? Math.round(position.speed * 3.6) : null,
+      stopId: vehicle.stopId || null,
       moving: vehicle.currentStatus !== STOPPED_AT,
     });
   }

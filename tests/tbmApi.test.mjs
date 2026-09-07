@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { TbmApiError, TbmClient, groupStopsByName, parseLines, parsePassages, parseStops } from "../js/tbmApi.js";
+import {
+  TbmApiError,
+  TbmClient,
+  groupStopsByName,
+  parseLines,
+  parsePassages,
+  parseStops,
+  stopNumericId,
+} from "../js/tbmApi.js";
 
 const STOPS_PAYLOAD = {
   Siri: {
@@ -131,6 +139,15 @@ test("parseStops drops coordinates that fall far outside the Bordeaux area", () 
       ["Quinconces (valide)", 44.84, -0.57],
     ],
   );
+});
+
+test("stopNumericId extracts the bare id GTFS-RT reports as a vehicle's stop_id", () => {
+  assert.equal(stopNumericId("bordeaux:StopPoint:BP:4970:LOC"), "4970");
+});
+
+test("stopNumericId returns null for an unrecognized or missing ref", () => {
+  assert.equal(stopNumericId("not-a-ref"), null);
+  assert.equal(stopNumericId(undefined), null);
 });
 
 test("parseLines indexes lines by ref with their public code/name", () => {
