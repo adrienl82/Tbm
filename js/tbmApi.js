@@ -7,6 +7,8 @@
 // API sends permissive CORS headers, so the browser can call it directly
 // with no backend in between.
 
+import { isValidCoordinate } from "./geoBounds.js";
+
 export const BASE_URL = "https://bdx.mecatran.com/utw/ws/siri/2.0/bordeaux";
 export const ACCOUNT_KEY = "opendata-bordeaux-metropole-flux-gtfs-rt";
 
@@ -26,13 +28,20 @@ function parseTime(value) {
 
 export function parseStops(payload) {
   const refs = payload?.Siri?.StopPointsDelivery?.AnnotatedStopPointRef ?? [];
-  return refs.map((entry) => ({
-    ref: entry.StopPointRef.value,
-    name: entry.StopName?.value ?? "?",
-    latitude: entry.Location?.latitude ?? 0,
-    longitude: entry.Location?.longitude ?? 0,
-    lineRefs: (entry.Lines ?? []).map((line) => line.value),
-  }));
+  return refs.map((entry) => {
+    const location = entry.Location ?? {};
+    const valid = isValidCoordinate(location.latitude, location.longitude);
+    return {
+      ref: entry.StopPointRef.value,
+      name: entry.StopName?.value ?? "?",
+      // Bad/missing coordinates (e.g. (0, 0)) are dropped rather than kept
+      // as a wrong location -- the stop itself (name, refs, lines) is
+      // still perfectly usable without one.
+      latitude: valid ? location.latitude : null,
+      longitude: valid ? location.longitude : null,
+      lineRefs: (entry.Lines ?? []).map((line) => line.value),
+    };
+  });
 }
 
 // A named stop (e.g. "Quinconces") is really a cluster of physical stop

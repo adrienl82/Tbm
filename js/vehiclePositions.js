@@ -1,0 +1,104 @@
+// Fetches TBM's live GTFS-RT vehicle positions feed for a given line and
+// decodes it with protobufjs (loaded globally from a CDN script tag, like
+// Leaflet's `L`). This is a different feed than both the SIRI-Lite
+// real-time schedules (tbmApi.js) and the static route shapes
+// (lineShapes.js): it's the actual bus/tram GPS positions, refreshed by
+// TBM roughly every 10-30 seconds.
+//
+// GTFS_REALTIME_PROTO is a trimmed copy of the public, stable
+// gtfs-realtime.proto schema -- only the fields this app reads.
+
+import { isValidCoordinate } from "./geoBounds.js";
+import { lineNumericId } from "./lineShapes.js";
+
+const FEED_URL =
+  "https://bdx.mecatran.com/utw/ws/gtfsfeed/vehicles/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt";
+
+const GTFS_REALTIME_PROTO = `
+syntax = "proto2";
+package transit_realtime;
+
+message FeedMessage {
+  repeated FeedEntity entity = 2;
+}
+
+message FeedEntity {
+  optional VehiclePosition vehicle = 4;
+}
+
+message TripDescriptor {
+  optional string trip_id = 1;
+  optional string route_id = 5;
+}
+
+message VehicleDescriptor {
+  optional string id = 1;
+  optional string label = 2;
+}
+
+message Position {
+  required float latitude = 1;
+  required float longitude = 2;
+  optional float bearing = 3;
+}
+
+message VehiclePosition {
+  optional TripDescriptor trip = 1;
+  optional VehicleDescriptor vehicle = 8;
+  optional Position position = 2;
+  optional uint64 timestamp = 5;
+}
+`;
+
+let feedMessageType = null;
+
+function getFeedMessageType(pbLib) {
+  if (!feedMessageType) {
+    feedMessageType = pbLib.parse(GTFS_REALTIME_PROTO).root.lookupType("transit_realtime.FeedMessage");
+  }
+  return feedMessageType;
+}
+
+// decoded is the plain object form of a FeedMessage (FeedMessage.toObject()).
+// routeId is the bare numeric line id (see lineShapes.js's lineNumericId).
+// Vehicles with a missing position or a coordinate outside the sanity
+// bounds (GPS glitches routinely report (0, 0) or wildly wrong fixes) are
+// dropped rather than shown in the wrong place.
+export function parseVehiclePositions(decoded, routeId) {
+  const entities = decoded?.entity ?? [];
+  const vehicles = [];
+  for (const entity of entities) {
+    const vehicle = entity.vehicle;
+    const position = vehicle?.position;
+    if (!vehicle || !position) continue;
+    if (String(vehicle.trip?.routeId ?? "") !== String(routeId)) continue;
+    if (!isValidCoordinate(position.latitude, position.longitude)) continue;
+    vehicles.push({
+      id: vehicle.vehicle?.id || vehicle.trip?.tripId || "",
+      label: vehicle.vehicle?.label ?? "",
+      latitude: position.latitude,
+      longitude: position.longitude,
+      bearing: typeof position.bearing === "number" ? position.bearing : null,
+    });
+  }
+  return vehicles;
+}
+
+export async function fetchVehiclePositions(lineRef, { fetchImpl = null, protobufImpl = null } = {}) {
+  const routeId = lineNumericId(lineRef);
+  if (!routeId) return [];
+
+  const fetcher = fetchImpl ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : null);
+  const pbLib = protobufImpl ?? (typeof protobuf !== "undefined" ? protobuf : null);
+  if (!fetcher || !pbLib) return [];
+
+  const response = await fetcher(FEED_URL);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} en recuperant les positions des vehicules`);
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+
+  const FeedMessage = getFeedMessageType(pbLib);
+  const decoded = FeedMessage.toObject(FeedMessage.decode(bytes), { defaults: true });
+  return parseVehiclePositions(decoded, routeId);
+}

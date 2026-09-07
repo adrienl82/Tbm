@@ -1,6 +1,7 @@
 import { TbmClient } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
+import { fetchVehiclePositions } from "./vehiclePositions.js";
 
 const REFRESH_INTERVAL_MS = 30000; // matches TBM's own real-time refresh rate
 const DEFAULT_LINE_COLOR = "#0a3d62";
@@ -183,6 +184,9 @@ async function refreshBoard() {
 
 let lineMap = null;
 let lineMapLayer = null;
+let vehicleLayer = null;
+let vehicleRefreshTimer = null;
+let currentLinePassage = null;
 
 function ensureLineMap() {
   if (lineMap) return lineMap;
@@ -192,7 +196,31 @@ function ensureLineMap() {
     maxZoom: 19,
   }).addTo(lineMap);
   lineMapLayer = L.layerGroup().addTo(lineMap);
+  vehicleLayer = L.layerGroup().addTo(lineMap);
   return lineMap;
+}
+
+async function refreshVehicles(passage) {
+  if (!passage || !vehicleLayer) return;
+  const label = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
+  try {
+    const vehicles = await fetchVehiclePositions(passage.lineRef);
+    const color = passageAccentColor(passage);
+    vehicleLayer.clearLayers();
+    for (const vehicle of vehicles) {
+      L.circleMarker([vehicle.latitude, vehicle.longitude], {
+        radius: 7,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 1,
+      })
+        .bindTooltip(vehicle.label || label)
+        .addTo(vehicleLayer);
+    }
+  } catch (err) {
+    console.error("Impossible de charger les positions des vehicules :", err);
+  }
 }
 
 async function openLineMap(passage) {
@@ -203,7 +231,10 @@ async function openLineMap(passage) {
   // above, so Leaflet needs a nudge to pick up its now-real size.
   requestAnimationFrame(() => map.invalidateSize());
 
+  currentLinePassage = passage;
   lineMapLayer.clearLayers();
+  vehicleLayer.clearLayers();
+
   try {
     const shapes = await fetchLineShapes(passage.lineRef);
     const color = passageAccentColor(passage);
@@ -220,6 +251,18 @@ async function openLineMap(passage) {
   } catch (err) {
     console.error("Impossible de charger le trace de la ligne :", err);
   }
+
+  refreshVehicles(passage);
+  if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
+  vehicleRefreshTimer = setInterval(() => refreshVehicles(currentLinePassage), REFRESH_INTERVAL_MS);
+}
+
+function closeLineMap() {
+  if (vehicleRefreshTimer) {
+    clearInterval(vehicleRefreshTimer);
+    vehicleRefreshTimer = null;
+  }
+  currentLinePassage = null;
 }
 
 function updateFavoriteButton() {
@@ -286,6 +329,7 @@ for (const id of ["filter-tram", "filter-bus"]) {
 
 function goHome() {
   if (refreshTimer) clearInterval(refreshTimer);
+  closeLineMap();
   showScreen("search");
   syncUrl(); // drop the ?stop= param, keep the search text/filters
 }
@@ -293,7 +337,10 @@ function goHome() {
 document.getElementById("home-link").addEventListener("click", goHome);
 document.getElementById("back-from-board").addEventListener("click", goHome);
 document.getElementById("back-from-favorites").addEventListener("click", goHome);
-document.getElementById("back-from-map").addEventListener("click", () => showScreen("board"));
+document.getElementById("back-from-map").addEventListener("click", () => {
+  closeLineMap();
+  showScreen("board");
+});
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
   showScreen("favorites");

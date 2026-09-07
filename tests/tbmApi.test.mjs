@@ -95,6 +95,44 @@ test("parseStops maps the SIRI payload to plain stop objects", () => {
   assert.equal(stops[0].ref, "bordeaux:StopPoint:BP:1:LOC");
 });
 
+test("parseStops drops coordinates that fall far outside the Bordeaux area", () => {
+  const payload = {
+    Siri: {
+      StopPointsDelivery: {
+        AnnotatedStopPointRef: [
+          {
+            StopPointRef: { value: "bordeaux:StopPoint:BP:9:LOC" },
+            StopName: { value: "Null Island" },
+            Location: { latitude: 0, longitude: 0 }, // classic GPS-glitch coordinate
+            Lines: [],
+          },
+          {
+            StopPointRef: { value: "bordeaux:StopPoint:BP:10:LOC" },
+            StopName: { value: "Sans coordonnees" },
+            Lines: [], // no Location field at all
+          },
+          {
+            StopPointRef: { value: "bordeaux:StopPoint:BP:11:LOC" },
+            StopName: { value: "Quinconces (valide)" },
+            Location: { latitude: 44.84, longitude: -0.57 },
+            Lines: [],
+          },
+        ],
+      },
+    },
+  };
+
+  const stops = parseStops(payload);
+  assert.deepEqual(
+    stops.map((s) => [s.name, s.latitude, s.longitude]),
+    [
+      ["Null Island", null, null],
+      ["Sans coordonnees", null, null],
+      ["Quinconces (valide)", 44.84, -0.57],
+    ],
+  );
+});
+
 test("parseLines indexes lines by ref with their public code/name", () => {
   const lines = parseLines(LINES_PAYLOAD);
   const line = lines.get("bordeaux:Line:A:LOC");
