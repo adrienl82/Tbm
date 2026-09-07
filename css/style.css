@@ -186,6 +186,7 @@ ul {
   font-weight: 700;
   color: var(--accent);
   min-width: 4.5em;
+  cursor: pointer;
 }
 
 .passage-destination {
@@ -200,4 +201,11 @@ ul {
 .status {
   color: var(--muted);
   text-align: center;
+}
+
+#line-map {
+  flex: 1;
+  min-height: 0;
+  border-radius: 10px;
+  overflow: hidden;
 }

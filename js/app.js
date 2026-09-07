@@ -1,7 +1,9 @@
 import { TbmClient } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
+import { fetchLineShapes } from "./lineShapes.js";
 
 const REFRESH_INTERVAL_MS = 30000; // matches TBM's own real-time refresh rate
+const DEFAULT_LINE_COLOR = "#0a3d62";
 
 const client = new TbmClient();
 const favorites = new FavoritesStore();
@@ -10,6 +12,7 @@ const screens = {
   search: document.getElementById("screen-search"),
   board: document.getElementById("screen-board"),
   favorites: document.getElementById("screen-favorites"),
+  map: document.getElementById("screen-map"),
 };
 
 let refreshTimer = null;
@@ -64,6 +67,15 @@ function busLineStyle(passage) {
   return match ? { background: match[1], color: "#ffffff" } : null;
 }
 
+// The single color that best represents a line -- its own color for a
+// tram, its badge/outline color for a bus -- reused for both the passage
+// row and the line's route on the map.
+function passageAccentColor(passage) {
+  if (passage.mode === "tram") return TRAM_LINE_COLORS[passage.lineCode] ?? DEFAULT_LINE_COLOR;
+  const style = busLineStyle(passage);
+  return style?.background ?? style?.outline ?? DEFAULT_LINE_COLOR;
+}
+
 function showScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
     el.hidden = key !== name;
@@ -113,6 +125,8 @@ function passageRowElement(passage) {
   eta.textContent = passage.bestTime
     ? passage.bestTime.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
     : "?";
+
+  code.addEventListener("click", () => openLineMap(passage));
 
   li.append(code, dest, eta);
   return li;
@@ -164,6 +178,47 @@ async function refreshBoard() {
     }
   } catch (err) {
     statusEl.textContent = `Erreur : ${err.message}`;
+  }
+}
+
+let lineMap = null;
+let lineMapLayer = null;
+
+function ensureLineMap() {
+  if (lineMap) return lineMap;
+  lineMap = L.map("line-map");
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  }).addTo(lineMap);
+  lineMapLayer = L.layerGroup().addTo(lineMap);
+  return lineMap;
+}
+
+async function openLineMap(passage) {
+  document.getElementById("map-title").textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
+  showScreen("map");
+  const map = ensureLineMap();
+  // The map container was hidden (display:none) until showScreen ran just
+  // above, so Leaflet needs a nudge to pick up its now-real size.
+  requestAnimationFrame(() => map.invalidateSize());
+
+  lineMapLayer.clearLayers();
+  try {
+    const shapes = await fetchLineShapes(passage.lineRef);
+    const color = passageAccentColor(passage);
+    const bounds = [];
+    for (const shape of shapes) {
+      L.polyline(shape.latLngs, {
+        color,
+        weight: 4,
+        opacity: shape.direction === "retour" ? 0.55 : 0.9,
+      }).addTo(lineMapLayer);
+      bounds.push(...shape.latLngs);
+    }
+    if (bounds.length) map.fitBounds(bounds, { padding: [20, 20] });
+  } catch (err) {
+    console.error("Impossible de charger le trace de la ligne :", err);
   }
 }
 
@@ -238,6 +293,7 @@ function goHome() {
 document.getElementById("home-link").addEventListener("click", goHome);
 document.getElementById("back-from-board").addEventListener("click", goHome);
 document.getElementById("back-from-favorites").addEventListener("click", goHome);
+document.getElementById("back-from-map").addEventListener("click", () => showScreen("board"));
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
   showScreen("favorites");

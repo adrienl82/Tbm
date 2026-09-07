@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>TBM Temps Reel</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     <link rel="stylesheet" href="css/style.css" />
   </head>
   <body>
@@ -52,7 +53,16 @@
         </header>
         <ul id="favorites-list" class="stop-list"></ul>
       </section>
+
+      <section id="screen-map" hidden>
+        <header class="board-header">
+          <button id="back-from-map" class="link">&lt; Retour</button>
+          <h2 id="map-title"></h2>
+        </header>
+        <div id="line-map"></div>
+      </section>
     </main>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
     <script type="module" src="js/app.js"></script>
   </body>
 </html>
