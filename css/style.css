@@ -309,3 +309,13 @@ ul {
     opacity: 0;
   }
 }
+
+/* Smaller than Leaflet's default tooltip so it stays out of the way while
+   following a vehicle -- paired with a fixed direction (see bindTooltip in
+   app.js) so it neither grows large enough to crowd the map edge nor flips
+   sides as the followed marker sits pinned at the center. */
+.vehicle-tooltip {
+  padding: 3px 6px;
+  font-size: 11px;
+  line-height: 1.3;
+}

@@ -436,7 +436,11 @@ async function refreshVehicles(passage) {
         marker.setTooltipContent(vehicleTooltip(vehicle, label));
       } else {
         marker = L.marker([vehicle.latitude, vehicle.longitude], { icon })
-          .bindTooltip(vehicleTooltip(vehicle, label))
+          // A fixed direction (rather than Leaflet's default "auto", which
+          // picks left/right based on space around the marker) matters most
+          // for a followed vehicle: it sits pinned at the map's center, so
+          // "auto" would otherwise flip sides on the smallest jitter.
+          .bindTooltip(vehicleTooltip(vehicle, label), { direction: "top", offset: [0, -14], className: "vehicle-tooltip" })
           .addTo(vehicleLayer);
         if (vehicle.id) {
           marker.on("click", () => setFollowedVehicle(vehicle.id));
@@ -508,14 +512,13 @@ function animateVehicles() {
   vehicleAnimationFrame = requestAnimationFrame(animateVehicles);
 }
 
-// Extends the route/stops view to also include the user's live position,
-// rather than centering tightly on them alone -- that would cut off the
-// route context they opened the map to see. Marked directly on the map
-// object (not one of the layer groups openLineMap() clears) so it survives
-// switching lines; a request id discards a stale fix if the user switches
-// lines again before it resolves. Silent on failure/denial: this is a
-// progressive enhancement, not something worth showing an error for.
-function centerOnUserLocation(map, fitPoints) {
+// Recenters the map on the user's live position once geolocation resolves,
+// keeping whatever zoom the route/stops fit already picked. Marked directly
+// on the map object (not one of the layer groups openLineMap() clears) so it
+// survives switching lines; a request id discards a stale fix if the user
+// switches lines again before it resolves. Silent on failure/denial: this is
+// a progressive enhancement, not something worth showing an error for.
+function centerOnUserLocation(map) {
   if (!navigator.geolocation) return;
   const requestId = ++geoRequestId;
   navigator.geolocation.getCurrentPosition(
@@ -532,9 +535,7 @@ function centerOnUserLocation(map, fitPoints) {
       })
         .bindTooltip("Vous etes ici")
         .addTo(map);
-      const bounds = L.latLngBounds(fitPoints.length > 0 ? fitPoints : [userPoint]);
-      bounds.extend(userPoint);
-      map.fitBounds(bounds, { padding: [20, 20] });
+      map.setView(userPoint, map.getZoom());
     },
     (err) => {
       console.warn("Geolocalisation indisponible :", err.message);
@@ -627,7 +628,7 @@ async function openLineMap(passage) {
   // checked out, otherwise the stops so the map still lands on the line.
   const fitPoints = routeBounds.length > 0 ? routeBounds : stopPoints;
   if (fitPoints.length > 0) map.fitBounds(fitPoints, { padding: [20, 20] });
-  centerOnUserLocation(map, fitPoints);
+  centerOnUserLocation(map);
 
   refreshVehicles(passage);
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
