@@ -361,7 +361,8 @@ function vehicleTooltip(vehicle, fallbackLabel) {
     if (vehicle.speedKmh !== null) parts.push(`${vehicle.speedKmh} km/h`);
     detail = parts.join(" - ");
   }
-  return `${title}<br>${detail}${time ? `<br>${time}` : ""}`;
+  const idLine = vehicle.id ? `<br>vehicule ${vehicle.id}` : "";
+  return `${title}<br>${detail}${idLine}${time ? `<br>${time}` : ""}`;
 }
 
 // How long a marker takes to ease from wherever it was displayed (its
