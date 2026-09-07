@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  decelerateTowardStop,
   destinationPoint,
   distanceToStopAhead,
   estimateVehiclePosition,
@@ -98,13 +99,48 @@ test("estimateVehiclePosition doesn't move backward for a fix that looks like it
   assert.deepEqual(estimateVehiclePosition(vehicle, Date.now()), [44.84, -0.58]);
 });
 
-test("estimateVehiclePosition caps travel short of a nearby stop instead of overshooting it", () => {
+test("decelerateTowardStop matches raw distance before the braking zone (plain cruise)", () => {
+  assert.equal(decelerateTowardStop(20, 100, 30), 20); // 20m < brakeStart (70m): untouched
+});
+
+test("decelerateTowardStop eases toward, but never quite reaches, maxDistance", () => {
+  const near = decelerateTowardStop(90, 100, 30); // just past brake-start (70m)
+  const far = decelerateTowardStop(500, 100, 30); // way past it
+  assert.ok(near > 70 && near < 100, `expected between 70 and 100, got ${near}`);
+  assert.ok(far > near, "further naive travel should still creep closer to the stop");
+  assert.ok(far < 100, `should never reach maxDistance, got ${far}`);
+});
+
+test("decelerateTowardStop returns 0 when there's no room left before the stop", () => {
+  assert.equal(decelerateTowardStop(50, 0, 30), 0);
+});
+
+test("decelerateTowardStop shrinks the brake zone rather than starting before distance 0", () => {
+  // maxDistance (10) is smaller than the default brake zone (30) -- the
+  // whole approach should ease, not just the last 30m of a 10m stretch.
+  const d = decelerateTowardStop(50, 10, 30);
+  assert.ok(d > 0 && d < 10, `expected an eased value between 0 and 10, got ${d}`);
+});
+
+test("estimateVehiclePosition eases travel toward a nearby stop instead of freezing dead at a hard cap", () => {
   // Fast vehicle (25 m/s) that last reported 10s ago (250m of naive travel)
-  // but was only 50m from its next stop at that fix.
+  // but was only 50m from its next stop at that fix -- well past where
+  // braking (the default last 30m) begins.
   const vehicle = vehicleAt({ speedKmh: 90, secondsAgo: 10 });
   const [lat, lon] = estimateVehiclePosition(vehicle, Date.now(), { nearestStopMeters: 50, stopSafetyMarginM: 15 });
   const moved = distanceMeters([44.84, -0.58], [lat, lon]);
-  assert.ok(Math.abs(moved - 35) < 2, `expected travel capped at ~35m, got ${moved}`);
+  assert.ok(Math.abs(moved - 35) < 2, `expected travel eased to just under ~35m, got ${moved}`);
+});
+
+test("estimateVehiclePosition keeps creeping forward, slower, as it nears the stop rather than stopping dead", () => {
+  const vehicle = vehicleAt({ speedKmh: 90, secondsAgo: 8 }); // just entering the braking zone
+  const vehicleLater = vehicleAt({ speedKmh: 90, secondsAgo: 12 }); // well into it
+  const early = estimateVehiclePosition(vehicle, Date.now(), { nearestStopMeters: 50, stopSafetyMarginM: 15 });
+  const later = estimateVehiclePosition(vehicleLater, Date.now(), { nearestStopMeters: 50, stopSafetyMarginM: 15 });
+  const earlyMoved = distanceMeters([44.84, -0.58], early);
+  const laterMoved = distanceMeters([44.84, -0.58], later);
+  assert.ok(laterMoved > earlyMoved, "should still be inching forward, not frozen");
+  assert.ok(laterMoved < 35, "should stay short of the cap");
 });
 
 test("estimateVehiclePosition doesn't move past a stop it's already within the safety margin of", () => {

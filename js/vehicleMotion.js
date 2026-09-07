@@ -142,6 +142,23 @@ function closestProjection(point, polylines) {
   return best;
 }
 
+// Maps a naive constant-speed travel distance to what to actually display
+// when maxDistance meters ahead is where the vehicle must stop (a stop it's
+// approaching). Below (maxDistance - brakeZoneM), it's a plain cruise: the
+// two distances match. Past that point it eases off exponentially, so the
+// displayed distance closes in on maxDistance asymptotically -- decelerating
+// smoothly rather than travelling at a constant speed and then freezing dead
+// the instant the old hard cap was reached.
+export function decelerateTowardStop(rawDistance, maxDistance, brakeZoneM = 30) {
+  if (maxDistance <= 0) return 0;
+  const zone = Math.min(brakeZoneM, maxDistance);
+  const brakeStart = maxDistance - zone;
+  if (rawDistance <= brakeStart) return rawDistance;
+  if (zone === 0) return maxDistance;
+  const overshoot = rawDistance - brakeStart;
+  return brakeStart + zone * (1 - Math.exp(-overshoot / zone));
+}
+
 // Estimates where a vehicle actually is at nowMs, projecting forward from
 // its last known fix (lat/lon/bearing/speedKmh/timestamp) at constant
 // speed. Returns the vehicle's own [latitude, longitude] unchanged when
@@ -163,15 +180,15 @@ function closestProjection(point, polylines) {
 // would also cap a vehicle that just left a stop behind it. A real vehicle
 // brakes on approach; a naive constant-speed projection doesn't, and would
 // run the marker straight through (and past) a stop it's about to reach
-// while waiting for the next real fix. Capping the projected travel
-// distance to just short of that stop keeps the marker from ever visibly
-// skipping over one -- a straight-line distance is always <= the along-route
-// distance to the same stop, so it's a safe (if slightly conservative) cap
-// either way.
+// while waiting for the next real fix. decelerateTowardStop() eases the
+// projected travel distance toward just short of that stop instead of
+// travelling at a constant speed and stopping dead -- a straight-line
+// distance is always <= the along-route distance to the same stop, so it's a
+// safe (if slightly conservative) limit either way.
 export function estimateVehiclePosition(
   vehicle,
   nowMs,
-  { nearestStopMeters = null, stopSafetyMarginM = 15, routePolylines = null } = {},
+  { nearestStopMeters = null, stopSafetyMarginM = 15, brakeZoneM = 30, routePolylines = null } = {},
 ) {
   const { latitude, longitude, bearing, speedKmh, timestamp, moving } = vehicle;
   if (!moving || !timestamp || bearing === null || !speedKmh) return [latitude, longitude];
@@ -181,7 +198,7 @@ export function estimateVehiclePosition(
 
   let travelDistance = (speedKmh / 3.6) * elapsedSeconds;
   if (nearestStopMeters !== null) {
-    travelDistance = Math.min(travelDistance, Math.max(nearestStopMeters - stopSafetyMarginM, 0));
+    travelDistance = decelerateTowardStop(travelDistance, Math.max(nearestStopMeters - stopSafetyMarginM, 0), brakeZoneM);
   }
   if (travelDistance <= 0) return [latitude, longitude];
 
