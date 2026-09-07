@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseVehiclePositions } from "../js/vehiclePositions.js";
+import { activeRouteIds, parseVehiclePositions } from "../js/vehiclePositions.js";
 
 function decodedWith(entities) {
   return { entity: entities };
@@ -125,4 +125,27 @@ test("parseVehiclePositions falls back to the trip id when the vehicle has no id
 test("parseVehiclePositions handles an empty or missing entity list", () => {
   assert.deepEqual(parseVehiclePositions({}, "59"), []);
   assert.deepEqual(parseVehiclePositions(decodedWith([]), "59"), []);
+});
+
+test("activeRouteIds collects the distinct routes with at least one valid-position vehicle", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 } } },
+    { vehicle: { trip: { routeId: "24" }, position: { latitude: 44.85, longitude: -0.58 } } },
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.86, longitude: -0.59 } } }, // duplicate route
+  ]);
+  assert.deepEqual([...activeRouteIds(decoded)].sort(), ["24", "59"]);
+});
+
+test("activeRouteIds ignores vehicles with a missing or glitched (0,0) position", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" } } }, // no position
+    { vehicle: { trip: { routeId: "24" }, position: { latitude: 0, longitude: 0 } } }, // GPS glitch
+    { vehicle: { trip: { routeId: "35" }, position: { latitude: 44.84, longitude: -0.57 } } }, // valid
+  ]);
+  assert.deepEqual([...activeRouteIds(decoded)], ["35"]);
+});
+
+test("activeRouteIds handles an empty or missing entity list", () => {
+  assert.deepEqual(activeRouteIds({}), new Set());
+  assert.deepEqual(activeRouteIds(decodedWith([])), new Set());
 });

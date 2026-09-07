@@ -1,7 +1,7 @@
 import { TbmClient, stopNumericId } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
-import { fetchLineShapes } from "./lineShapes.js";
-import { fetchVehiclePositions } from "./vehiclePositions.js";
+import { fetchLineShapes, lineNumericId } from "./lineShapes.js";
+import { fetchActiveRouteIds, fetchVehiclePositions } from "./vehiclePositions.js";
 import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 import {
   distanceToStopAhead,
@@ -187,24 +187,52 @@ function sortByCode(lines) {
 // Shown on the home screen when the search box is empty: every tram line,
 // then every bus line, each opening straight onto its map. Respects the
 // same tram/bus filter checkboxes as stop search.
+// Cached briefly so toggling the tram/bus filter checkboxes -- which
+// re-renders this list -- doesn't refetch the whole vehicle feed every time.
+let activeRouteIdsCache = null;
+let activeRouteIdsCacheAt = 0;
+const ACTIVE_ROUTE_IDS_CACHE_MS = 20000;
+
+// The set of numeric line ids with at least one vehicle actually running
+// right now, or null if that couldn't be determined (a fetch failure) --
+// callers should treat null as "unknown" and not hide anything on that
+// basis, since a transient network error hiding every line would look like
+// the app itself was broken rather than TBM's feed being briefly down.
+async function getActiveRouteIds() {
+  if (activeRouteIdsCache && Date.now() - activeRouteIdsCacheAt < ACTIVE_ROUTE_IDS_CACHE_MS) {
+    return activeRouteIdsCache;
+  }
+  try {
+    activeRouteIdsCache = await fetchActiveRouteIds();
+    activeRouteIdsCacheAt = Date.now();
+  } catch (err) {
+    console.error("Impossible de determiner les lignes en service :", err);
+  }
+  return activeRouteIdsCache;
+}
+
 async function renderLinesBrowser() {
   const resultsEl = document.getElementById("search-results");
   resultsEl.innerHTML = "";
   resultsEl.classList.add("lines-grid");
-  const lines = await client.listLines();
+  const [lines, activeIds] = await Promise.all([client.listLines(), getActiveRouteIds()]);
   const modes = selectedModes();
   const wantsTram = !modes || modes.includes("tram");
   const wantsBus = !modes || modes.includes("bus");
+  // Many lines (TBNight, the SCODI school routes, event navettes...) only
+  // run part of the day -- hide the ones with no vehicle in service right
+  // now rather than list a line that opens onto an empty map.
+  const inService = (line) => !activeIds || activeIds.has(lineNumericId(line.ref));
 
   if (wantsTram) {
-    const trams = sortByCode(lines.filter((line) => line.mode === "tram"));
+    const trams = sortByCode(lines.filter((line) => line.mode === "tram" && inService(line)));
     if (trams.length > 0) {
       resultsEl.appendChild(lineGroupHeading("Trams"));
       for (const line of trams) resultsEl.appendChild(lineBadgeElement(line, openLineMap));
     }
   }
   if (wantsBus) {
-    const buses = sortByCode(lines.filter((line) => line.mode === "bus"));
+    const buses = sortByCode(lines.filter((line) => line.mode === "bus" && inService(line)));
     if (buses.length > 0) {
       resultsEl.appendChild(lineGroupHeading("Bus"));
       for (const line of buses) resultsEl.appendChild(lineBadgeElement(line, openLineMap));

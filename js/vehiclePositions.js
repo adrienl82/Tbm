@@ -103,13 +103,29 @@ export function parseVehiclePositions(decoded, routeId) {
   return vehicles;
 }
 
-export async function fetchVehiclePositions(lineRef, { fetchImpl = null, protobufImpl = null } = {}) {
-  const routeId = lineNumericId(lineRef);
-  if (!routeId) return [];
+// route_id (as a string) of every vehicle currently reporting a valid
+// position, regardless of line -- lets a caller tell which lines actually
+// have service running right now (many, like TBNight or the SCODI school
+// routes, only run part of the day) versus just existing in the static
+// line list.
+export function activeRouteIds(decoded) {
+  const entities = decoded?.entity ?? [];
+  const ids = new Set();
+  for (const entity of entities) {
+    const vehicle = entity.vehicle;
+    const position = vehicle?.position;
+    if (!vehicle || !position) continue;
+    if (!isValidCoordinate(position.latitude, position.longitude)) continue;
+    const routeId = vehicle.trip?.routeId;
+    if (routeId !== undefined && routeId !== null && routeId !== "") ids.add(String(routeId));
+  }
+  return ids;
+}
 
+async function fetchDecodedFeed({ fetchImpl = null, protobufImpl = null } = {}) {
   const fetcher = fetchImpl ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : null);
   const pbLib = protobufImpl ?? (typeof protobuf !== "undefined" ? protobuf : null);
-  if (!fetcher || !pbLib) return [];
+  if (!fetcher || !pbLib) return null;
 
   const response = await fetcher(FEED_URL);
   if (!response.ok) {
@@ -121,6 +137,18 @@ export async function fetchVehiclePositions(lineRef, { fetchImpl = null, protobu
   // longs: Number -- the timestamp (Unix seconds) is well within safe
   // integer range, and a plain number is simpler to work with than the
   // Long objects protobufjs otherwise produces for uint64 fields.
-  const decoded = FeedMessage.toObject(FeedMessage.decode(bytes), { defaults: true, longs: Number });
+  return FeedMessage.toObject(FeedMessage.decode(bytes), { defaults: true, longs: Number });
+}
+
+export async function fetchVehiclePositions(lineRef, options = {}) {
+  const routeId = lineNumericId(lineRef);
+  if (!routeId) return [];
+  const decoded = await fetchDecodedFeed(options);
+  if (!decoded) return [];
   return parseVehiclePositions(decoded, routeId);
+}
+
+export async function fetchActiveRouteIds(options = {}) {
+  const decoded = await fetchDecodedFeed(options);
+  return decoded ? activeRouteIds(decoded) : new Set();
 }
