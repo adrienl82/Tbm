@@ -15,7 +15,7 @@ const screens = {
 let refreshTimer = null;
 let currentStop = null;
 
-// Official TBM tram line colors (bus lines keep the default accent color).
+// Official TBM tram line colors.
 const TRAM_LINE_COLORS = {
   A: "#802991", // Violet
   B: "#EE154A", // Rouge
@@ -24,6 +24,45 @@ const TRAM_LINE_COLORS = {
   E: "#80684C", // Brun / Taupe
   F: "#E8822F", // Orange
 };
+
+// Bus lines don't have one official color per line like trams do -- TBM
+// colors them as badges (background + text) by category instead, inferred
+// here from the line's own name (LineName from lines-discovery.json).
+// A few individual lines (specific navettes, ex-TransGironde regional
+// lines folded into the network) get their own dedicated colors by code.
+const BUS_LINE_COLORS_BY_CODE = {
+  18: { background: "#E01745", color: "#ffffff" }, // Navette Stade
+  19: { background: "#CD117F", color: "#ffffff" }, // Navette Arena
+  301: { background: "#6E8878", color: "#ffffff" },
+  302: { background: "#B05F0F", color: "#ffffff" },
+  303: { background: "#F0CB02", color: "#000000" },
+  304: { background: "#EE0000", color: "#ffffff" },
+  310: { background: "#77278D", color: "#ffffff" },
+  313: { background: "#0073AE", color: "#ffffff" },
+};
+
+const SCODI_COLOR = "#0C4F9D";
+
+const BUS_CATEGORY_COLORS = [
+  [/^bus express/i, "#E52423"], // Lignes structurantes directes (G, H, F41-F44)
+  [/^lianes/i, "#E65A00"],
+  [/^principale/i, "#009639"],
+  [/^locale/i, "#7D2181"],
+  [/^directe/i, "#006CA9"],
+  [/^flex'/i, "#F2AE00"],
+  [/^tbnight/i, "#F2AE00"],
+];
+
+// Returns { background, color } for a badge, or { outline } for the
+// scolaire (ScoDi) style: white background with a blue outline. null when
+// the line doesn't match any known category (kept on the plain default).
+function busLineStyle(passage) {
+  const byCode = BUS_LINE_COLORS_BY_CODE[passage.lineCode];
+  if (byCode) return byCode;
+  if (/^scodi/i.test(passage.lineName ?? "")) return { outline: SCODI_COLOR };
+  const match = BUS_CATEGORY_COLORS.find(([pattern]) => pattern.test(passage.lineName ?? ""));
+  return match ? { background: match[1], color: "#ffffff" } : null;
+}
 
 function showScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
@@ -46,8 +85,24 @@ function passageRowElement(passage) {
   const code = document.createElement("span");
   code.className = "passage-line";
   code.textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
-  const tramColor = passage.mode === "tram" ? TRAM_LINE_COLORS[passage.lineCode] : null;
-  if (tramColor) code.style.color = tramColor;
+  if (passage.mode === "tram") {
+    const tramColor = TRAM_LINE_COLORS[passage.lineCode];
+    if (tramColor) code.style.color = tramColor;
+  } else {
+    const style = busLineStyle(passage);
+    if (style?.outline) {
+      code.style.color = style.outline;
+      code.style.background = "#ffffff";
+      code.style.border = `1px solid ${style.outline}`;
+      code.style.borderRadius = "4px";
+      code.style.padding = "1px 6px";
+    } else if (style) {
+      code.style.background = style.background;
+      code.style.color = style.color;
+      code.style.borderRadius = "4px";
+      code.style.padding = "1px 6px";
+    }
+  }
 
   const dest = document.createElement("span");
   dest.className = "passage-destination";
