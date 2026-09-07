@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { boundsFromPoints, boundsOverlap, isValidCoordinate, shapeCoversStops } from "../js/geoBounds.js";
+import {
+  boundsFromPoints,
+  boundsOverlap,
+  isNearAnyPoint,
+  isValidCoordinate,
+  shapeCoversStops,
+} from "../js/geoBounds.js";
 
 test("isValidCoordinate accepts a real Bordeaux point", () => {
   assert.equal(isValidCoordinate(44.84, -0.57), true);
@@ -99,4 +105,19 @@ test("shapeCoversStops honors a custom threshold and minimum fraction", () => {
 test("shapeCoversStops returns false for empty inputs", () => {
   assert.equal(shapeCoversStops([], [[44.84, -0.58]]), false);
   assert.equal(shapeCoversStops([[44.84, -0.58]], []), false);
+});
+
+test("isNearAnyPoint is true within the threshold and false beyond it", () => {
+  const stops = [
+    [44.84, -0.58],
+    [44.85, -0.57],
+  ];
+  assert.equal(isNearAnyPoint([44.8401, -0.5799], stops, 150), true); // a few meters away
+  assert.equal(isNearAnyPoint([44.78, -0.62], stops, 1000), false); // Talence-ish, ~8km off
+});
+
+test("isNearAnyPoint returns false for empty or missing inputs", () => {
+  assert.equal(isNearAnyPoint(null, [[44.84, -0.58]], 500), false);
+  assert.equal(isNearAnyPoint([44.84, -0.58], [], 500), false);
+  assert.equal(isNearAnyPoint([44.84, -0.58], null, 500), false);
 });

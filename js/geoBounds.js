@@ -46,7 +46,7 @@ export function boundsOverlap(a, b, marginDeg = 0) {
 }
 
 // Distance in meters between two [lat, lon] points (haversine).
-function distanceMeters([lat1, lon1], [lat2, lon2]) {
+export function distanceMeters([lat1, lon1], [lat2, lon2]) {
   const R = 6371000;
   const toRad = (deg) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
@@ -73,4 +73,16 @@ export function shapeCoversStops(shapePoints, stopPoints, { thresholdMeters = 15
     shapePoints.some((point) => distanceMeters(stop, point) <= thresholdMeters),
   ).length;
   return covered / stopPoints.length >= minFraction;
+}
+
+// Whether point sits within thresholdMeters of at least one of points.
+// Used to sanity-check a live vehicle position against the line's own
+// stops: TBM's GTFS-RT feed occasionally tags a vehicle with the wrong
+// route_id (the same class of mistagging already seen in the static route
+// shapes), which places it many kilometers from any stop the line it
+// claims to serve actually has -- far more than the gap between two
+// consecutive stops on the same route.
+export function isNearAnyPoint(point, points, thresholdMeters) {
+  if (!point || !points || points.length === 0) return false;
+  return points.some((p) => distanceMeters(point, p) <= thresholdMeters);
 }

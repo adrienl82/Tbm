@@ -2,10 +2,18 @@ import { TbmClient, stopNumericId } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
 import { fetchVehiclePositions } from "./vehiclePositions.js";
-import { shapeCoversStops } from "./geoBounds.js";
+import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 
 const REFRESH_INTERVAL_MS = 30000; // matches TBM's own real-time refresh rate
 const DEFAULT_LINE_COLOR = "#0a3d62";
+
+// How far a live vehicle may sit from its own line's nearest stop and still
+// be trusted (meters). TBM's GTFS-RT feed occasionally mistags a vehicle
+// with the wrong route_id, which then reports a real position -- just for a
+// different, distant line -- that a plain Bordeaux-area sanity check can't
+// catch. A real Tram A vehicle checked against Tram A's own 89 stops never
+// exceeded ~350m; a mistagged one is typically several kilometers off.
+const VEHICLE_STOP_DISTANCE_METERS = 1000;
 
 const client = new TbmClient();
 const favorites = new FavoritesStore();
@@ -277,6 +285,7 @@ let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
 let currentStopNames = new Map();
+let currentStopPoints = [];
 let lineMapRequestId = 0;
 
 function ensureLineMap() {
@@ -333,6 +342,13 @@ async function refreshVehicles(passage) {
     const color = passageAccentColor(passage);
     vehicleLayer.clearLayers();
     for (const vehicle of vehicles) {
+      // TBM's GTFS-RT feed occasionally mistags a vehicle with the wrong
+      // route_id -- it then reports a real position, just nowhere near this
+      // line's own stops. Drop it rather than show it confidently in the
+      // wrong place.
+      if (!isNearAnyPoint([vehicle.latitude, vehicle.longitude], currentStopPoints, VEHICLE_STOP_DISTANCE_METERS)) {
+        continue;
+      }
       const icon = vehicleDivIcon(letter, color, vehicle.moving);
       L.marker([vehicle.latitude, vehicle.longitude], { icon })
         .bindTooltip(vehicleTooltip(vehicle, label))
@@ -415,6 +431,7 @@ async function openLineMap(passage) {
   currentStopNames = new Map(
     stops.map((stop) => [stopNumericId(stop.ref), stop.name]).filter(([id]) => id !== null),
   );
+  currentStopPoints = stopPoints;
 
   let routeBounds = [];
   try {
