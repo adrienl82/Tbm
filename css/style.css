@@ -276,6 +276,16 @@ ul {
   opacity: 0.55;
 }
 
+/* A followed vehicle (tapped to have the map track it) gets a white ring
+   and grows slightly, independent of its own line color, so it's clear at
+   a glance which one is selected among several nearby badges. */
+.vehicle-marker.is-followed .vehicle-badge {
+  box-shadow:
+    0 0 0 3px #ffffff,
+    0 0 0 5px rgba(0, 0, 0, 0.45);
+  transform: scale(1.15);
+}
+
 .vehicle-pulse {
   display: none;
 }

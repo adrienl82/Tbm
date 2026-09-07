@@ -196,3 +196,12 @@ export function estimateVehiclePosition(
   const targetDistance = Math.max(0, Math.min(projection.totalLength, projection.distanceAlong + direction * travelDistance));
   return pointAtDistanceAlong(polyline, targetDistance);
 }
+
+// Straight-line blend between two [lat, lon] points, t clamped to [0, 1].
+// Used to ease a marker from wherever it was displayed (its dead-reckoned
+// estimate, which may have drifted a little) to a fresh real fix over a
+// short window, instead of snapping the moment a new fetch lands.
+export function lerpLatLng(from, to, t) {
+  const clamped = Math.max(0, Math.min(1, t));
+  return [from[0] + (to[0] - from[0]) * clamped, from[1] + (to[1] - from[1]) * clamped];
+}

@@ -5,6 +5,7 @@ import {
   destinationPoint,
   distanceToStopAhead,
   estimateVehiclePosition,
+  lerpLatLng,
   pointAtDistanceAlong,
   projectOntoPolyline,
 } from "../js/vehicleMotion.js";
@@ -190,4 +191,20 @@ test("estimateVehiclePosition still caps travel short of a stop while following 
   });
   const moved = distanceMeters([44.84, -0.58], [44.84, lon]);
   assert.ok(Math.abs(moved - 35) < 2, `expected travel capped at ~35m, got ${moved}`);
+});
+
+test("lerpLatLng returns the start point at t=0 and the end point at t=1", () => {
+  assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], 0), [44.8, -0.6]);
+  assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], 1), [44.9, -0.5]);
+});
+
+test("lerpLatLng blends proportionally in between", () => {
+  const [lat, lon] = lerpLatLng([44.8, -0.6], [44.9, -0.5], 0.5);
+  assert.ok(Math.abs(lat - 44.85) < 1e-9);
+  assert.ok(Math.abs(lon - -0.55) < 1e-9);
+});
+
+test("lerpLatLng clamps t outside [0, 1]", () => {
+  assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], -1), [44.8, -0.6]);
+  assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], 5), [44.9, -0.5]);
 });

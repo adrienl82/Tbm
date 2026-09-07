@@ -3,7 +3,7 @@ import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
 import { fetchVehiclePositions } from "./vehiclePositions.js";
 import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
-import { distanceToStopAhead, estimateVehiclePosition } from "./vehicleMotion.js";
+import { distanceToStopAhead, estimateVehiclePosition, lerpLatLng } from "./vehicleMotion.js";
 
 const REFRESH_INTERVAL_MS = 10000; // TBM's own feed updates roughly every 10-30s
 const DEFAULT_LINE_COLOR = "#0a3d62";
@@ -288,6 +288,11 @@ let vehicleAnimationFrame = null;
 // position instead of sitting frozen at their last fix for up to
 // REFRESH_INTERVAL_MS (or jumping in visible steps).
 let activeVehicles = [];
+// The id of the vehicle the user tapped to follow, or null. Kept across
+// refreshes (markers are recreated every REFRESH_INTERVAL_MS) by matching
+// on this id each time, so the selection and its open tooltip survive a
+// refresh instead of resetting to nothing.
+let followedVehicleId = null;
 // The line's own trusted route shape (see openLineMap), as one or more
 // [lat, lon] arrays -- animateVehicles() makes estimated positions follow
 // this rather than cut across in a straight line. Empty when no route
@@ -311,6 +316,12 @@ function ensureLineMap() {
   lineMapLayer = L.layerGroup().addTo(lineMap);
   stopMarkersLayer = L.layerGroup().addTo(lineMap);
   vehicleLayer = L.layerGroup().addTo(lineMap);
+  // A manual pan means the user wants to look elsewhere -- fighting that by
+  // keeping the camera locked onto a followed vehicle would be worse than
+  // just letting go of it.
+  lineMap.on("dragstart", () => {
+    followedVehicleId = null;
+  });
   return lineMap;
 }
 
@@ -318,9 +329,11 @@ function ensureLineMap() {
 // distinct from the smaller plain dots used for stops. Moving vehicles get
 // a pulsing halo (a common "live" indicator); a stopped one is shown dimmed
 // with no pulse, so the two states are visually distinct at a glance.
-function vehicleDivIcon(letter, color, moving) {
+// Tapping a marker follows it (see refreshVehicles/animateVehicles);
+// is-followed adds a visible ring so it's clear which one that is.
+function vehicleDivIcon(letter, color, moving, followed) {
   return L.divIcon({
-    className: `vehicle-marker ${moving ? "is-moving" : "is-stopped"}`,
+    className: `vehicle-marker ${moving ? "is-moving" : "is-stopped"}${followed ? " is-followed" : ""}`,
     html: `<div class="vehicle-pulse" style="background:${color}"></div><div class="vehicle-badge" style="background:${color}">${letter}</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
@@ -351,6 +364,31 @@ function vehicleTooltip(vehicle, fallbackLabel) {
   return `${title}<br>${detail}${time ? `<br>${time}` : ""}`;
 }
 
+// How long a marker takes to ease from wherever it was displayed (its
+// dead-reckoned estimate, which is rarely exact) to a fresh real fix,
+// instead of snapping there the instant a new fetch lands.
+const POSITION_TRANSITION_MS = 2000;
+
+// Tapping a vehicle toggles whether the map follows it (animateVehicles
+// re-centers on it every frame). Updates the tapped marker's icon (and the
+// previously-followed one's, if different) right away, rather than waiting
+// for the next refresh to redraw with the new is-followed class -- without
+// this the camera would already be tracking the vehicle while its own
+// marker still looked unselected for up to REFRESH_INTERVAL_MS.
+function setFollowedVehicle(id) {
+  const previousId = followedVehicleId;
+  followedVehicleId = previousId === id ? null : id;
+  if (!currentLinePassage) return;
+  const letter = currentLinePassage.mode === "tram" ? "T" : "B";
+  const color = passageAccentColor(currentLinePassage);
+  for (const entry of activeVehicles) {
+    if (entry.vehicle.id !== previousId && entry.vehicle.id !== followedVehicleId) continue;
+    const isFollowed = entry.vehicle.id === followedVehicleId;
+    entry.marker.setIcon(vehicleDivIcon(letter, color, entry.vehicle.moving, isFollowed));
+    if (isFollowed) entry.marker.openTooltip();
+  }
+}
+
 async function refreshVehicles(passage) {
   if (!passage || !vehicleLayer) return;
   const letter = passage.mode === "tram" ? "T" : "B";
@@ -362,8 +400,15 @@ async function refreshVehicles(passage) {
     // paint another line's vehicles onto the one now showing.
     if (currentLinePassage?.lineRef !== passage.lineRef) return;
     const color = passageAccentColor(passage);
-    vehicleLayer.clearLayers();
-    activeVehicles = [];
+
+    // Matched by vehicle id so a vehicle already on screen keeps the same
+    // marker (and so its open tooltip / follow ring / in-flight position
+    // transition survive) instead of being torn down and rebuilt from
+    // scratch every refresh.
+    const previousById = new Map(activeVehicles.filter((entry) => entry.vehicle.id).map((entry) => [entry.vehicle.id, entry]));
+    const seenIds = new Set();
+    const nextActiveVehicles = [];
+
     for (const vehicle of vehicles) {
       // TBM's GTFS-RT feed occasionally mistags a vehicle with the wrong
       // route_id -- it then reports a real position, just nowhere near this
@@ -372,20 +417,59 @@ async function refreshVehicles(passage) {
       if (!isNearAnyPoint([vehicle.latitude, vehicle.longitude], currentStopPoints, VEHICLE_STOP_DISTANCE_METERS)) {
         continue;
       }
-      const icon = vehicleDivIcon(letter, color, vehicle.moving);
-      const marker = L.marker([vehicle.latitude, vehicle.longitude], { icon })
-        .bindTooltip(vehicleTooltip(vehicle, label))
-        .addTo(vehicleLayer);
-      // Distance to the line's own closest stop actually ahead of this
-      // vehicle at this last known fix -- animateVehicles() uses it so a
-      // fast vehicle's estimated position never creeps past a stop it's
-      // about to reach before its next fix.
-      activeVehicles.push({
+      const isFollowed = Boolean(vehicle.id) && vehicle.id === followedVehicleId;
+      const icon = vehicleDivIcon(letter, color, vehicle.moving, isFollowed);
+      const previous = vehicle.id ? previousById.get(vehicle.id) : null;
+      if (vehicle.id) seenIds.add(vehicle.id);
+
+      let marker;
+      let transition = null;
+      if (previous) {
+        marker = previous.marker;
+        // Ease from wherever the marker is actually displayed right now
+        // (its dead-reckoned estimate) to this fresh fix, rather than
+        // jumping straight to it -- animateVehicles() blends the two over
+        // POSITION_TRANSITION_MS.
+        const current = marker.getLatLng();
+        transition = { from: [current.lat, current.lng], start: Date.now() };
+        marker.setIcon(icon);
+        marker.setTooltipContent(vehicleTooltip(vehicle, label));
+      } else {
+        marker = L.marker([vehicle.latitude, vehicle.longitude], { icon })
+          .bindTooltip(vehicleTooltip(vehicle, label))
+          .addTo(vehicleLayer);
+        if (vehicle.id) {
+          marker.on("click", () => setFollowedVehicle(vehicle.id));
+        }
+      }
+      // A freshly (re)opened tooltip so the selection reads as continuous
+      // across refreshes instead of closing and reopening.
+      if (isFollowed) marker.openTooltip();
+
+      nextActiveVehicles.push({
         vehicle,
         marker,
+        transition,
+        // Distance to the line's own closest stop actually ahead of this
+        // vehicle at this last known fix -- animateVehicles() uses it so a
+        // fast vehicle's estimated position never creeps past a stop it's
+        // about to reach before its next fix.
         nearestStopMeters: distanceToStopAhead([vehicle.latitude, vehicle.longitude], vehicle.bearing, currentStopPoints),
       });
     }
+
+    // Vehicles from the previous refresh that no longer appear (finished
+    // service, or a matched marker was already reused above) get removed.
+    for (const [id, entry] of previousById) {
+      if (!seenIds.has(id)) vehicleLayer.removeLayer(entry.marker);
+    }
+    // Vehicles with no id could never be matched for reuse; the old ones
+    // among them are stale copies still sitting on the layer.
+    for (const entry of activeVehicles) {
+      if (!entry.vehicle.id) vehicleLayer.removeLayer(entry.marker);
+    }
+
+    activeVehicles = nextActiveVehicles;
   } catch (err) {
     console.error("Impossible de charger les positions des vehicules :", err);
   }
@@ -398,10 +482,28 @@ async function refreshVehicles(passage) {
 // REFRESH_INTERVAL_MS. Runs on requestAnimationFrame rather than a
 // fixed-interval timer so the motion is as smooth as the display can
 // render, not stepped.
+// Also, when a vehicle is being followed (see refreshVehicles), keeps it
+// centered on every frame as it moves -- setView with animate:false snaps
+// straight to the new center instead of stacking a pan transition on top
+// of one already running from the previous frame.
 function animateVehicles() {
   const now = Date.now();
-  for (const { vehicle, marker, nearestStopMeters } of activeVehicles) {
-    marker.setLatLng(estimateVehiclePosition(vehicle, now, { nearestStopMeters, routePolylines: currentRoutePolylines }));
+  for (const entry of activeVehicles) {
+    const { vehicle, marker, nearestStopMeters, transition } = entry;
+    const estimated = estimateVehiclePosition(vehicle, now, { nearestStopMeters, routePolylines: currentRoutePolylines });
+    let position = estimated;
+    if (transition) {
+      const t = (now - transition.start) / POSITION_TRANSITION_MS;
+      if (t >= 1) {
+        entry.transition = null;
+      } else {
+        position = lerpLatLng(transition.from, estimated, t);
+      }
+    }
+    marker.setLatLng(position);
+    if (vehicle.id && vehicle.id === followedVehicleId) {
+      lineMap.setView(position, lineMap.getZoom(), { animate: false });
+    }
   }
   vehicleAnimationFrame = requestAnimationFrame(animateVehicles);
 }
@@ -461,9 +563,11 @@ async function openLineMap(passage) {
   requestAnimationFrame(() => map.invalidateSize());
 
   currentLinePassage = passage;
+  followedVehicleId = null;
   lineMapLayer.clearLayers();
   stopMarkersLayer.clearLayers();
   vehicleLayer.clearLayers();
+  activeVehicles = [];
 
   const color = passageAccentColor(passage);
 
@@ -543,6 +647,7 @@ function closeLineMap() {
   }
   activeVehicles = [];
   currentRoutePolylines = [];
+  followedVehicleId = null;
   currentLinePassage = null;
 }
 
