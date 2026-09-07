@@ -166,11 +166,27 @@ export class TbmClient {
     return data;
   }
 
-  async listStops() {
+  async _rawStops() {
     const payload = await this._cachedJson("tbm.cache.stops", STOPS_CACHE_TTL_MS, () =>
       this._get("stoppoints-discovery.json"),
     );
-    return groupStopsByName(parseStops(payload));
+    return parseStops(payload);
+  }
+
+  async listStops() {
+    return groupStopsByName(await this._rawStops());
+  }
+
+  // Individual physical stop points (platforms) served by a line, each at
+  // its own real position -- unlike listStops()'s grouped-by-name stops,
+  // which collapse platforms into one representative point. Used to plot
+  // stop markers along a line's route on the map. Points with no valid
+  // coordinate (see parseStops) are skipped rather than plotted at (0, 0).
+  async stopsForLine(lineRef) {
+    const stops = await this._rawStops();
+    return stops.filter(
+      (stop) => stop.lineRefs.includes(lineRef) && stop.latitude !== null && stop.longitude !== null,
+    );
   }
 
   // modes, when given, keeps only stops served by at least one line in that

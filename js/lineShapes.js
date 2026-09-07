@@ -5,6 +5,8 @@
 // segment), not live schedules. CORS is open, so the browser calls it
 // directly.
 
+import { isValidCoordinate } from "./geoBounds.js";
+
 const BASE_URL = "https://opendata.bordeaux-metropole.fr/api/records/1.0/search/";
 const DATASET = "sv_chem_l";
 
@@ -17,17 +19,30 @@ export function lineNumericId(lineRef) {
 
 export function parseLineShapes(payload) {
   const records = payload?.records ?? [];
-  return records
-    .map((record) => {
-      const coordinates = record.fields?.geo_shape?.coordinates;
-      if (!coordinates) return null;
-      return {
-        direction: record.fields.sens === "RETOUR" ? "retour" : "aller",
+  const shapes = [];
+  for (const record of records) {
+    const geoShape = record.fields?.geo_shape;
+    if (!geoShape?.coordinates) continue;
+    const direction = record.fields.sens === "RETOUR" ? "retour" : "aller";
+
+    // This dataset mixes two GeoJSON geometry types: most segments are a
+    // flat LineString ([lon, lat] pairs), but a good third are a
+    // MultiLineString (an array of those). Treating a MultiLineString's
+    // nested coordinates as a flat LineString silently destructures garbage
+    // out of it -- exactly the kind of "point in the middle of the ocean"
+    // that also forces fitBounds() to zoom out to a continental scale.
+    const lines = geoShape.type === "MultiLineString" ? geoShape.coordinates : [geoShape.coordinates];
+
+    for (const line of lines) {
+      if (!Array.isArray(line) || !line.every(([lon, lat]) => isValidCoordinate(lat, lon))) continue;
+      shapes.push({
+        direction,
         // GeoJSON coordinates are [lon, lat]; Leaflet wants [lat, lon].
-        latLngs: coordinates.map(([lon, lat]) => [lat, lon]),
-      };
-    })
-    .filter(Boolean);
+        latLngs: line.map(([lon, lat]) => [lat, lon]),
+      });
+    }
+  }
+  return shapes;
 }
 
 export async function fetchLineShapes(lineRef, { fetchImpl = null } = {}) {

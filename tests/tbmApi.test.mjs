@@ -410,3 +410,42 @@ test("TbmClient.stopMonitoring returns the refs that answered even if others fai
   assert.equal(passages.length, 1);
   assert.equal(passages[0].destination, "Quatre Chemins");
 });
+
+test("TbmClient.stopsForLine returns each individual platform on a line, with valid coordinates only", async () => {
+  const payload = {
+    Siri: {
+      StopPointsDelivery: {
+        AnnotatedStopPointRef: [
+          {
+            StopPointRef: { value: "bordeaux:StopPoint:BP:1:LOC" },
+            StopName: { value: "Quinconces" },
+            Location: { latitude: 44.84, longitude: -0.57 },
+            Lines: [{ value: "bordeaux:Line:A:LOC" }],
+          },
+          {
+            StopPointRef: { value: "bordeaux:StopPoint:BP:2:LOC" },
+            StopName: { value: "Quinconces" },
+            Location: { latitude: 0, longitude: 0 }, // glitched: dropped
+            Lines: [{ value: "bordeaux:Line:A:LOC" }],
+          },
+          {
+            StopPointRef: { value: "bordeaux:StopPoint:BP:3:LOC" },
+            StopName: { value: "Gambetta" },
+            Location: { latitude: 44.84, longitude: -0.58 },
+            Lines: [{ value: "bordeaux:Line:B:LOC" }], // different line: excluded
+          },
+        ],
+      },
+    },
+  };
+  const client = new TbmClient({
+    storage: new MemoryStorage(),
+    fetchImpl: async () => ({ ok: true, json: async () => payload }),
+  });
+
+  const stops = await client.stopsForLine("bordeaux:Line:A:LOC");
+  assert.deepEqual(
+    stops.map((s) => s.ref),
+    ["bordeaux:StopPoint:BP:1:LOC"],
+  );
+});

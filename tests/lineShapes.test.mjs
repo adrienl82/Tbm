@@ -49,6 +49,75 @@ test("parseLineShapes converts GeoJSON [lon, lat] segments to Leaflet [lat, lon]
   assert.deepEqual(shapes[1], { direction: "retour", latLngs: [[44.85, -0.58]] });
 });
 
+test("parseLineShapes unpacks a MultiLineString into one shape per sub-line", () => {
+  const payload = {
+    records: [
+      {
+        fields: {
+          sens: "ALLER",
+          geo_shape: {
+            type: "MultiLineString",
+            coordinates: [
+              [
+                [-0.57, 44.84],
+                [-0.571, 44.841],
+              ],
+              [
+                [-0.58, 44.85],
+                [-0.581, 44.851],
+              ],
+            ],
+          },
+        },
+      },
+    ],
+  };
+
+  const shapes = parseLineShapes(payload);
+  assert.equal(shapes.length, 2);
+  assert.deepEqual(
+    shapes.map((s) => s.latLngs),
+    [
+      [
+        [44.84, -0.57],
+        [44.841, -0.571],
+      ],
+      [
+        [44.85, -0.58],
+        [44.851, -0.581],
+      ],
+    ],
+  );
+});
+
+test("parseLineShapes drops a segment containing any out-of-bounds point (e.g. a geocoding glitch)", () => {
+  const payload = {
+    records: [
+      {
+        fields: {
+          sens: "ALLER",
+          geo_shape: {
+            coordinates: [
+              [-0.57, 44.84],
+              [45.0, -1.5], // wildly wrong -- e.g. the Indian Ocean
+            ],
+          },
+        },
+      },
+      {
+        fields: {
+          sens: "ALLER",
+          geo_shape: { coordinates: [[-0.57, 44.84]] },
+        },
+      },
+    ],
+  };
+
+  const shapes = parseLineShapes(payload);
+  assert.equal(shapes.length, 1);
+  assert.deepEqual(shapes[0].latLngs, [[44.84, -0.57]]);
+});
+
 test("fetchLineShapes queries the open data API by the line's numeric id", async () => {
   let requestedUrl = null;
   const shapes = await fetchLineShapes("bordeaux:Line:59:LOC", {

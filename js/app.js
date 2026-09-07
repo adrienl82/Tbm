@@ -184,6 +184,7 @@ async function refreshBoard() {
 
 let lineMap = null;
 let lineMapLayer = null;
+let stopMarkersLayer = null;
 let vehicleLayer = null;
 let vehicleRefreshTimer = null;
 let currentLinePassage = null;
@@ -196,25 +197,33 @@ function ensureLineMap() {
     maxZoom: 19,
   }).addTo(lineMap);
   lineMapLayer = L.layerGroup().addTo(lineMap);
+  stopMarkersLayer = L.layerGroup().addTo(lineMap);
   vehicleLayer = L.layerGroup().addTo(lineMap);
   return lineMap;
 }
 
+// A small circular badge with a single letter ("T" for tram, "B" for bus),
+// distinct from the smaller plain dots used for stops.
+function vehicleDivIcon(letter, color) {
+  return L.divIcon({
+    className: "vehicle-marker",
+    html: `<div class="vehicle-badge" style="background:${color}">${letter}</div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+  });
+}
+
 async function refreshVehicles(passage) {
   if (!passage || !vehicleLayer) return;
+  const letter = passage.mode === "tram" ? "T" : "B";
   const label = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
   try {
     const vehicles = await fetchVehiclePositions(passage.lineRef);
     const color = passageAccentColor(passage);
+    const icon = vehicleDivIcon(letter, color);
     vehicleLayer.clearLayers();
     for (const vehicle of vehicles) {
-      L.circleMarker([vehicle.latitude, vehicle.longitude], {
-        radius: 7,
-        color: "#ffffff",
-        weight: 2,
-        fillColor: color,
-        fillOpacity: 1,
-      })
+      L.marker([vehicle.latitude, vehicle.longitude], { icon })
         .bindTooltip(vehicle.label || label)
         .addTo(vehicleLayer);
     }
@@ -233,11 +242,12 @@ async function openLineMap(passage) {
 
   currentLinePassage = passage;
   lineMapLayer.clearLayers();
+  stopMarkersLayer.clearLayers();
   vehicleLayer.clearLayers();
 
+  const color = passageAccentColor(passage);
   try {
     const shapes = await fetchLineShapes(passage.lineRef);
-    const color = passageAccentColor(passage);
     const bounds = [];
     for (const shape of shapes) {
       L.polyline(shape.latLngs, {
@@ -250,6 +260,23 @@ async function openLineMap(passage) {
     if (bounds.length) map.fitBounds(bounds, { padding: [20, 20] });
   } catch (err) {
     console.error("Impossible de charger le trace de la ligne :", err);
+  }
+
+  try {
+    const stops = await client.stopsForLine(passage.lineRef);
+    for (const stop of stops) {
+      L.circleMarker([stop.latitude, stop.longitude], {
+        radius: 3,
+        color: "#ffffff",
+        weight: 1,
+        fillColor: color,
+        fillOpacity: 1,
+      })
+        .bindTooltip(stop.name)
+        .addTo(stopMarkersLayer);
+    }
+  } catch (err) {
+    console.error("Impossible de charger les arrets de la ligne :", err);
   }
 
   refreshVehicles(passage);
