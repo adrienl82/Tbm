@@ -96,6 +96,8 @@ export function parseVehiclePositions(decoded, routeId) {
       speedKmh: typeof position.speed === "number" ? Math.round(position.speed * 3.6) : null,
       stopId: vehicle.stopId || null,
       moving: vehicle.currentStatus !== STOPPED_AT,
+      // GTFS-RT timestamps are Unix seconds.
+      timestamp: typeof vehicle.timestamp === "number" && vehicle.timestamp > 0 ? new Date(vehicle.timestamp * 1000) : null,
     });
   }
   return vehicles;
@@ -116,6 +118,9 @@ export async function fetchVehiclePositions(lineRef, { fetchImpl = null, protobu
   const bytes = new Uint8Array(await response.arrayBuffer());
 
   const FeedMessage = getFeedMessageType(pbLib);
-  const decoded = FeedMessage.toObject(FeedMessage.decode(bytes), { defaults: true });
+  // longs: Number -- the timestamp (Unix seconds) is well within safe
+  // integer range, and a plain number is simpler to work with than the
+  // Long objects protobufjs otherwise produces for uint64 fields.
+  const decoded = FeedMessage.toObject(FeedMessage.decode(bytes), { defaults: true, longs: Number });
   return parseVehiclePositions(decoded, routeId);
 }

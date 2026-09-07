@@ -97,6 +97,24 @@ test("parseVehiclePositions defaults speed and stop id to null when absent", () 
   assert.equal(vehicle.stopId, null);
 });
 
+test("parseVehiclePositions converts the GTFS-RT Unix-seconds timestamp to a Date", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 }, timestamp: 1700000000 } },
+  ]);
+  const [vehicle] = parseVehiclePositions(decoded, "59");
+  assert.equal(vehicle.timestamp.getTime(), 1700000000 * 1000);
+});
+
+test("parseVehiclePositions defaults timestamp to null when absent or zero", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 } } },
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.85, longitude: -0.58 }, timestamp: 0 } },
+  ]);
+  const vehicles = parseVehiclePositions(decoded, "59");
+  assert.equal(vehicles[0].timestamp, null);
+  assert.equal(vehicles[1].timestamp, null);
+});
+
 test("parseVehiclePositions falls back to the trip id when the vehicle has no id", () => {
   const decoded = decodedWith([
     { vehicle: { trip: { routeId: "59", tripId: "trip-1" }, position: { latitude: 44.84, longitude: -0.57 } } },

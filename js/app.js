@@ -318,15 +318,24 @@ function vehicleDivIcon(letter, color, moving) {
 // where it's headed (moving) or which stop it's sitting at (stopped) --
 // whichever of those is actually known, since stop_id doesn't always
 // resolve to a stop this line's own list has a name for.
+function formatTime(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function vehicleTooltip(vehicle, fallbackLabel) {
   const title = vehicle.label || fallbackLabel;
   const stopName = vehicle.stopId ? currentStopNames.get(vehicle.stopId) : null;
+  const time = vehicle.timestamp ? formatTime(vehicle.timestamp) : null;
+  let detail;
   if (!vehicle.moving) {
-    return `${title}<br>a l'arret${stopName ? ` : ${stopName}` : ""}`;
+    detail = `a l'arret${stopName ? ` : ${stopName}` : ""}`;
+  } else {
+    const parts = [stopName ? `vers ${stopName}` : "en circulation"];
+    if (vehicle.speedKmh !== null) parts.push(`${vehicle.speedKmh} km/h`);
+    detail = parts.join(" - ");
   }
-  const parts = [stopName ? `vers ${stopName}` : "en circulation"];
-  if (vehicle.speedKmh !== null) parts.push(`${vehicle.speedKmh} km/h`);
-  return `${title}<br>${parts.join(" - ")}`;
+  return `${title}<br>${detail}${time ? `<br>${time}` : ""}`;
 }
 
 async function refreshVehicles(passage) {
