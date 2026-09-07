@@ -216,6 +216,13 @@ export class TbmClient {
     return this._linesByRef;
   }
 
+  // Every known line (tram and bus), for browsing by line rather than by
+  // stop.
+  async listLines() {
+    const linesByRef = await this._lines();
+    return [...linesByRef.values()];
+  }
+
   // stopRefs is either a single physical stop ref or an array of them (a
   // named stop's platforms, from a grouped Stop's `refs`). Results from all
   // refs are merged into one time-sorted list; a failure on some refs

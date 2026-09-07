@@ -2,6 +2,16 @@ import { TbmClient } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
 import { fetchVehiclePositions } from "./vehiclePositions.js";
+import { boundsFromPoints, boundsOverlap } from "./geoBounds.js";
+
+// How far a route shape's bounding box may sit from its own stops' bounding
+// box and still be trusted (degrees). Bordeaux Metropole's open data
+// occasionally tags a route shape with the wrong line id entirely (e.g. bus
+// 28's "principal" shape is actually an unrelated route clear across town);
+// stops are sourced independently (each stop's own reported lines, from
+// SIRI-Lite) and have proven reliable, so they're the ground truth this
+// checks the shape against.
+const SHAPE_STOPS_MARGIN_DEG = 0.03;
 
 const REFRESH_INTERVAL_MS = 30000; // matches TBM's own real-time refresh rate
 const DEFAULT_LINE_COLOR = "#0a3d62";
@@ -77,6 +87,35 @@ function passageAccentColor(passage) {
   return style?.background ?? style?.outline ?? DEFAULT_LINE_COLOR;
 }
 
+// Applies the same "Tram A" text-color / "Bus 35" background-badge look to
+// any element, shared between passage rows and the home screen's line list.
+function applyLineBadgeStyle(el, passage) {
+  if (passage.mode === "tram") {
+    const tramColor = TRAM_LINE_COLORS[passage.lineCode];
+    if (tramColor) el.style.color = tramColor;
+    return;
+  }
+  const style = busLineStyle(passage);
+  if (style?.outline) {
+    el.style.color = style.outline;
+    el.style.background = "#ffffff";
+    el.style.border = `1px solid ${style.outline}`;
+    el.style.borderRadius = "4px";
+    el.style.padding = "1px 6px";
+  } else if (style) {
+    el.style.background = style.background;
+    el.style.color = style.color;
+    el.style.borderRadius = "4px";
+    el.style.padding = "1px 6px";
+  }
+}
+
+// Adapts a Line (from TbmClient.listLines()) to the shape passageAccentColor
+// / applyLineBadgeStyle / openLineMap expect from a Passage.
+function lineAsPassage(line) {
+  return { mode: line.mode, lineCode: line.code, lineName: line.name, lineRef: line.ref };
+}
+
 function showScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
     el.hidden = key !== name;
@@ -91,6 +130,63 @@ function stopRowElement(stop, onSelect) {
   return li;
 }
 
+function lineGroupHeading(text) {
+  const li = document.createElement("li");
+  li.className = "line-group-heading";
+  li.textContent = text;
+  return li;
+}
+
+function lineRowElement(line, onSelect) {
+  const li = document.createElement("li");
+  li.className = "stop-row line-row";
+  const passage = lineAsPassage(line);
+
+  const badge = document.createElement("span");
+  badge.className = "passage-line";
+  badge.textContent = `${line.mode === "tram" ? "Tram" : "Bus"} ${line.code}`;
+  applyLineBadgeStyle(badge, passage);
+
+  const name = document.createElement("span");
+  name.className = "line-name";
+  name.textContent = line.name;
+
+  li.append(badge, name);
+  li.addEventListener("click", () => onSelect(passage));
+  return li;
+}
+
+function sortByCode(lines) {
+  return lines.slice().sort((a, b) => a.code.localeCompare(b.code, "fr", { numeric: true }));
+}
+
+// Shown on the home screen when the search box is empty: every tram line,
+// then every bus line, each opening straight onto its map. Respects the
+// same tram/bus filter checkboxes as stop search.
+async function renderLinesBrowser() {
+  const resultsEl = document.getElementById("search-results");
+  resultsEl.innerHTML = "";
+  const lines = await client.listLines();
+  const modes = selectedModes();
+  const wantsTram = !modes || modes.includes("tram");
+  const wantsBus = !modes || modes.includes("bus");
+
+  if (wantsTram) {
+    const trams = sortByCode(lines.filter((line) => line.mode === "tram"));
+    if (trams.length > 0) {
+      resultsEl.appendChild(lineGroupHeading("Trams"));
+      for (const line of trams) resultsEl.appendChild(lineRowElement(line, openLineMap));
+    }
+  }
+  if (wantsBus) {
+    const buses = sortByCode(lines.filter((line) => line.mode === "bus"));
+    if (buses.length > 0) {
+      resultsEl.appendChild(lineGroupHeading("Bus"));
+      for (const line of buses) resultsEl.appendChild(lineRowElement(line, openLineMap));
+    }
+  }
+}
+
 function passageRowElement(passage) {
   const li = document.createElement("li");
   li.className = "passage-row";
@@ -98,24 +194,7 @@ function passageRowElement(passage) {
   const code = document.createElement("span");
   code.className = "passage-line";
   code.textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
-  if (passage.mode === "tram") {
-    const tramColor = TRAM_LINE_COLORS[passage.lineCode];
-    if (tramColor) code.style.color = tramColor;
-  } else {
-    const style = busLineStyle(passage);
-    if (style?.outline) {
-      code.style.color = style.outline;
-      code.style.background = "#ffffff";
-      code.style.border = `1px solid ${style.outline}`;
-      code.style.borderRadius = "4px";
-      code.style.padding = "1px 6px";
-    } else if (style) {
-      code.style.background = style.background;
-      code.style.color = style.color;
-      code.style.borderRadius = "4px";
-      code.style.padding = "1px 6px";
-    }
-  }
+  applyLineBadgeStyle(code, passage);
 
   const dest = document.createElement("span");
   dest.className = "passage-destination";
@@ -156,6 +235,10 @@ function syncUrl(stopRef = null) {
 }
 
 async function runSearch(query) {
+  if (!query.trim()) {
+    await renderLinesBrowser();
+    return;
+  }
   const resultsEl = document.getElementById("search-results");
   resultsEl.innerHTML = "";
   const stops = await client.searchStops(query, { modes: selectedModes() });
@@ -188,6 +271,7 @@ let stopMarkersLayer = null;
 let vehicleLayer = null;
 let vehicleRefreshTimer = null;
 let currentLinePassage = null;
+let mapReturnScreen = "search";
 
 function ensureLineMap() {
   if (lineMap) return lineMap;
@@ -234,6 +318,11 @@ async function refreshVehicles(passage) {
 
 async function openLineMap(passage) {
   document.getElementById("map-title").textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
+  const statusEl = document.getElementById("map-status");
+  statusEl.textContent = "";
+  // The line list opens the map straight from search; a passage badge opens
+  // it from the board. "Retour" should go back to whichever that was.
+  mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
   showScreen("map");
   const map = ensureLineMap();
   // The map container was hidden (display:none) until showScreen ran just
@@ -246,38 +335,57 @@ async function openLineMap(passage) {
   vehicleLayer.clearLayers();
 
   const color = passageAccentColor(passage);
+
+  let stops = [];
+  try {
+    stops = await client.stopsForLine(passage.lineRef);
+  } catch (err) {
+    console.error("Impossible de charger les arrets de la ligne :", err);
+  }
+  const stopPoints = stops.map((stop) => [stop.latitude, stop.longitude]);
+  const stopsBounds = boundsFromPoints(stopPoints);
+
+  let routeBounds = [];
   try {
     const shapes = await fetchLineShapes(passage.lineRef);
-    const bounds = [];
-    for (const shape of shapes) {
-      L.polyline(shape.latLngs, {
-        color,
-        weight: 4,
-        opacity: shape.direction === "retour" ? 0.55 : 0.9,
-      }).addTo(lineMapLayer);
-      bounds.push(...shape.latLngs);
+    const shapePoints = shapes.flatMap((shape) => shape.latLngs);
+    const shapeBounds = boundsFromPoints(shapePoints);
+    // Bordeaux Metropole's open data occasionally tags a route shape with
+    // the wrong line id -- if it doesn't even pass near this line's own
+    // stops, it's not this line's route: skip drawing it rather than show
+    // a confidently wrong path.
+    if (shapes.length > 0 && !boundsOverlap(stopsBounds, shapeBounds, SHAPE_STOPS_MARGIN_DEG)) {
+      statusEl.textContent = "Trace indisponible pour cette ligne";
+    } else {
+      for (const shape of shapes) {
+        L.polyline(shape.latLngs, {
+          color,
+          weight: 4,
+          opacity: shape.direction === "retour" ? 0.55 : 0.9,
+        }).addTo(lineMapLayer);
+      }
+      routeBounds = shapePoints;
     }
-    if (bounds.length) map.fitBounds(bounds, { padding: [20, 20] });
   } catch (err) {
     console.error("Impossible de charger le trace de la ligne :", err);
   }
 
-  try {
-    const stops = await client.stopsForLine(passage.lineRef);
-    for (const stop of stops) {
-      L.circleMarker([stop.latitude, stop.longitude], {
-        radius: 3,
-        color: "#ffffff",
-        weight: 1,
-        fillColor: color,
-        fillOpacity: 1,
-      })
-        .bindTooltip(stop.name)
-        .addTo(stopMarkersLayer);
-    }
-  } catch (err) {
-    console.error("Impossible de charger les arrets de la ligne :", err);
+  for (const stop of stops) {
+    L.circleMarker([stop.latitude, stop.longitude], {
+      radius: 3,
+      color: "#ffffff",
+      weight: 1,
+      fillColor: color,
+      fillOpacity: 1,
+    })
+      .bindTooltip(stop.name)
+      .addTo(stopMarkersLayer);
   }
+
+  // Fit to whichever points are actually trustworthy: the route when it
+  // checked out, otherwise the stops so the map still lands on the line.
+  const fitPoints = routeBounds.length > 0 ? routeBounds : stopPoints;
+  if (fitPoints.length > 0) map.fitBounds(fitPoints, { padding: [20, 20] });
 
   refreshVehicles(passage);
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
@@ -366,7 +474,7 @@ document.getElementById("back-from-board").addEventListener("click", goHome);
 document.getElementById("back-from-favorites").addEventListener("click", goHome);
 document.getElementById("back-from-map").addEventListener("click", () => {
   closeLineMap();
-  showScreen("board");
+  showScreen(mapReturnScreen);
 });
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
@@ -403,9 +511,7 @@ async function init() {
     }
   }
 
-  if (document.getElementById("search-input").value) {
-    runSearch(document.getElementById("search-input").value);
-  }
+  await runSearch(document.getElementById("search-input").value);
 }
 
 init();

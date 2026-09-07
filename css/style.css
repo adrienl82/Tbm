@@ -173,6 +173,25 @@ ul {
   border-bottom: none;
 }
 
+.line-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.line-name {
+  flex: 1;
+}
+
+.line-group-heading {
+  padding: 14px 12px 6px;
+  font-weight: 700;
+  color: var(--muted);
+  background: transparent;
+  cursor: default;
+  border-bottom: none;
+}
+
 .passage-row {
   display: flex;
   align-items: center;
@@ -204,8 +223,9 @@ ul {
 }
 
 #line-map {
-  flex: 1;
-  min-height: 0;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
   border-radius: 10px;
   overflow: hidden;
 }

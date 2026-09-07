@@ -17,3 +17,36 @@ export function isValidCoordinate(lat, lon) {
     lon <= BORDEAUX_BOUNDS.maxLon
   );
 }
+
+// points is an array of [lat, lon] pairs. Returns null for an empty list.
+export function boundsFromPoints(points) {
+  if (!points || points.length === 0) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  for (const [lat, lon] of points) {
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+  }
+  return { minLat, maxLat, minLon, maxLon };
+}
+
+// Whether two bounding boxes are within marginDeg of touching/overlapping.
+// Used to sanity-check that a line's route shape actually passes near the
+// stops that are genuinely reported for it -- Bordeaux Metropole's open
+// data occasionally tags a route shape with the wrong line id entirely
+// (e.g. bus 28's shape record is actually a different, unrelated route),
+// which a plain "is this coordinate in Bordeaux" check can't catch since
+// the wrong route is still somewhere in Bordeaux.
+export function boundsOverlap(a, b, marginDeg = 0) {
+  if (!a || !b) return false;
+  return (
+    a.minLat - marginDeg <= b.maxLat &&
+    a.maxLat + marginDeg >= b.minLat &&
+    a.minLon - marginDeg <= b.maxLon &&
+    a.maxLon + marginDeg >= b.minLon
+  );
+}
