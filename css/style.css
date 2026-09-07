@@ -243,9 +243,16 @@ ul {
   overflow: hidden;
 }
 
-.vehicle-marker {
-  position: relative;
-}
+/* No position rule here: Leaflet's own stylesheet already sets
+   position:absolute on .leaflet-marker-icon (which every .vehicle-marker
+   is), and that alone is a valid containing block for .vehicle-pulse's
+   position:absolute below. Overriding it to position:relative previously
+   pulled each marker back into normal document flow -- invisible at a
+   glance since transform still moves it to the right spot on screen, but
+   it also reserves flow space, so every vehicle marker after the first
+   pushed the next one further down, compounding into vehicles appearing
+   strung out far from their real position the more of them were open at
+   once. */
 
 .vehicle-badge {
   position: relative;
