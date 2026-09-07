@@ -277,6 +277,7 @@ let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
 let currentStopNames = new Map();
+let lineMapRequestId = 0;
 
 function ensureLineMap() {
   if (lineMap) return lineMap;
@@ -325,6 +326,10 @@ async function refreshVehicles(passage) {
   const label = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
   try {
     const vehicles = await fetchVehiclePositions(passage.lineRef);
+    // The user may have switched to a different line (or closed the map)
+    // while this fetch was in flight -- drop the response rather than
+    // paint another line's vehicles onto the one now showing.
+    if (currentLinePassage?.lineRef !== passage.lineRef) return;
     const color = passageAccentColor(passage);
     vehicleLayer.clearLayers();
     for (const vehicle of vehicles) {
@@ -374,6 +379,12 @@ function centerOnUserLocation(map, fitPoints) {
 }
 
 async function openLineMap(passage) {
+  // Opening a line is async (stops, then shape, both fetched over the
+  // network); if the user switches to another line before those resolve, a
+  // late response must not paint its stops/route onto the line now showing.
+  // Each call gets its own id and checks after every await that it's still
+  // the most recent one before touching any layer.
+  const requestId = ++lineMapRequestId;
   document.getElementById("map-title").textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
   const statusEl = document.getElementById("map-status");
   statusEl.textContent = "";
@@ -399,6 +410,7 @@ async function openLineMap(passage) {
   } catch (err) {
     console.error("Impossible de charger les arrets de la ligne :", err);
   }
+  if (requestId !== lineMapRequestId) return;
   const stopPoints = stops.map((stop) => [stop.latitude, stop.longitude]);
   currentStopNames = new Map(
     stops.map((stop) => [stopNumericId(stop.ref), stop.name]).filter(([id]) => id !== null),
@@ -427,6 +439,7 @@ async function openLineMap(passage) {
   } catch (err) {
     console.error("Impossible de charger le trace de la ligne :", err);
   }
+  if (requestId !== lineMapRequestId) return;
 
   for (const stop of stops) {
     L.circleMarker([stop.latitude, stop.longitude], {
