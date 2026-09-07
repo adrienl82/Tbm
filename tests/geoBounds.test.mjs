@@ -6,6 +6,7 @@ import {
   boundsOverlap,
   isNearAnyPoint,
   isValidCoordinate,
+  nearestPointDistance,
   shapeCoversStops,
 } from "../js/geoBounds.js";
 
@@ -120,4 +121,20 @@ test("isNearAnyPoint returns false for empty or missing inputs", () => {
   assert.equal(isNearAnyPoint(null, [[44.84, -0.58]], 500), false);
   assert.equal(isNearAnyPoint([44.84, -0.58], [], 500), false);
   assert.equal(isNearAnyPoint([44.84, -0.58], null, 500), false);
+});
+
+test("nearestPointDistance finds the closest of several points", () => {
+  const points = [
+    [44.9, -0.6], // far
+    [44.8401, -0.5799], // a few meters from [44.84, -0.58]
+    [43.3, -0.37], // very far
+  ];
+  const d = nearestPointDistance([44.84, -0.58], points);
+  assert.ok(d < 20, `expected a few meters, got ${d}`);
+});
+
+test("nearestPointDistance returns null for empty or missing inputs", () => {
+  assert.equal(nearestPointDistance(null, [[44.84, -0.58]]), null);
+  assert.equal(nearestPointDistance([44.84, -0.58], []), null);
+  assert.equal(nearestPointDistance([44.84, -0.58], null), null);
 });

@@ -86,3 +86,15 @@ export function isNearAnyPoint(point, points, thresholdMeters) {
   if (!point || !points || points.length === 0) return false;
   return points.some((p) => distanceMeters(point, p) <= thresholdMeters);
 }
+
+// Distance in meters from point to the closest of points, or null if
+// there's nothing to compare against.
+export function nearestPointDistance(point, points) {
+  if (!point || !points || points.length === 0) return null;
+  let min = Infinity;
+  for (const p of points) {
+    const d = distanceMeters(point, p);
+    if (d < min) min = d;
+  }
+  return min;
+}

@@ -2,9 +2,11 @@ import { TbmClient, stopNumericId } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes } from "./lineShapes.js";
 import { fetchVehiclePositions } from "./vehiclePositions.js";
-import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
+import { isNearAnyPoint, nearestPointDistance, shapeCoversStops } from "./geoBounds.js";
+import { estimateVehiclePosition } from "./vehicleMotion.js";
 
 const REFRESH_INTERVAL_MS = 30000; // matches TBM's own real-time refresh rate
+const ANIMATE_INTERVAL_MS = 1000; // how often markers creep toward their estimated live position between refreshes
 const DEFAULT_LINE_COLOR = "#0a3d62";
 
 // How far a live vehicle may sit from its own line's nearest stop and still
@@ -280,6 +282,12 @@ let lineMapLayer = null;
 let stopMarkersLayer = null;
 let vehicleLayer = null;
 let vehicleRefreshTimer = null;
+let vehicleAnimateTimer = null;
+// The live vehicles from the last real refresh, each paired with its own
+// marker -- animateVehicles() re-projects these every second between
+// refreshes so markers creep toward their estimated live position instead
+// of sitting frozen at their last fix for up to REFRESH_INTERVAL_MS.
+let activeVehicles = [];
 let currentLinePassage = null;
 let mapReturnScreen = "search";
 let geoRequestId = 0;
@@ -350,6 +358,7 @@ async function refreshVehicles(passage) {
     if (currentLinePassage?.lineRef !== passage.lineRef) return;
     const color = passageAccentColor(passage);
     vehicleLayer.clearLayers();
+    activeVehicles = [];
     for (const vehicle of vehicles) {
       // TBM's GTFS-RT feed occasionally mistags a vehicle with the wrong
       // route_id -- it then reports a real position, just nowhere near this
@@ -359,12 +368,31 @@ async function refreshVehicles(passage) {
         continue;
       }
       const icon = vehicleDivIcon(letter, color, vehicle.moving);
-      L.marker([vehicle.latitude, vehicle.longitude], { icon })
+      const marker = L.marker([vehicle.latitude, vehicle.longitude], { icon })
         .bindTooltip(vehicleTooltip(vehicle, label))
         .addTo(vehicleLayer);
+      // Distance to the line's own closest stop at this last known fix --
+      // animateVehicles() uses it so a fast vehicle's estimated position
+      // never creeps past a stop it's about to reach before its next fix.
+      activeVehicles.push({
+        vehicle,
+        marker,
+        nearestStopMeters: nearestPointDistance([vehicle.latitude, vehicle.longitude], currentStopPoints),
+      });
     }
   } catch (err) {
     console.error("Impossible de charger les positions des vehicules :", err);
+  }
+}
+
+// Between real refreshes, creeps every vehicle's marker toward its
+// estimated current position (dead-reckoned from its last fix's speed and
+// bearing) so the map reads as live rather than updating in visible jumps
+// every REFRESH_INTERVAL_MS.
+function animateVehicles() {
+  const now = Date.now();
+  for (const { vehicle, marker, nearestStopMeters } of activeVehicles) {
+    marker.setLatLng(estimateVehiclePosition(vehicle, now, { nearestStopMeters }));
   }
 }
 
@@ -488,6 +516,8 @@ async function openLineMap(passage) {
   refreshVehicles(passage);
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
   vehicleRefreshTimer = setInterval(() => refreshVehicles(currentLinePassage), REFRESH_INTERVAL_MS);
+  if (vehicleAnimateTimer) clearInterval(vehicleAnimateTimer);
+  vehicleAnimateTimer = setInterval(animateVehicles, ANIMATE_INTERVAL_MS);
 }
 
 function closeLineMap() {
@@ -495,6 +525,11 @@ function closeLineMap() {
     clearInterval(vehicleRefreshTimer);
     vehicleRefreshTimer = null;
   }
+  if (vehicleAnimateTimer) {
+    clearInterval(vehicleAnimateTimer);
+    vehicleAnimateTimer = null;
+  }
+  activeVehicles = [];
   currentLinePassage = null;
 }
 
