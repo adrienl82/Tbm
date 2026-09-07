@@ -80,10 +80,17 @@ input[type="search"] {
   margin-bottom: 12px;
 }
 
+#search-form {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
 .mode-filters {
   display: flex;
   gap: 20px;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .mode-filters label {
@@ -133,6 +140,9 @@ ul {
   margin: 0;
   padding: 0;
   overflow-y: auto;
+  flex: 1;
+  min-height: 0; /* let the list scroll within the flex column instead of the whole page,
+                    so the search box and mode filters above it stay visible and usable */
 }
 
 .stop-row {
