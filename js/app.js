@@ -291,11 +291,13 @@ function ensureLineMap() {
 }
 
 // A small circular badge with a single letter ("T" for tram, "B" for bus),
-// distinct from the smaller plain dots used for stops.
-function vehicleDivIcon(letter, color) {
+// distinct from the smaller plain dots used for stops. Moving vehicles get
+// a pulsing halo (a common "live" indicator); a stopped one is shown dimmed
+// with no pulse, so the two states are visually distinct at a glance.
+function vehicleDivIcon(letter, color, moving) {
   return L.divIcon({
-    className: "vehicle-marker",
-    html: `<div class="vehicle-badge" style="background:${color}">${letter}</div>`,
+    className: `vehicle-marker ${moving ? "is-moving" : "is-stopped"}`,
+    html: `<div class="vehicle-pulse" style="background:${color}"></div><div class="vehicle-badge" style="background:${color}">${letter}</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });
@@ -308,11 +310,11 @@ async function refreshVehicles(passage) {
   try {
     const vehicles = await fetchVehiclePositions(passage.lineRef);
     const color = passageAccentColor(passage);
-    const icon = vehicleDivIcon(letter, color);
     vehicleLayer.clearLayers();
     for (const vehicle of vehicles) {
+      const icon = vehicleDivIcon(letter, color, vehicle.moving);
       L.marker([vehicle.latitude, vehicle.longitude], { icon })
-        .bindTooltip(vehicle.label || label)
+        .bindTooltip(`${vehicle.label || label}${vehicle.moving ? "" : " (a l'arret)"}`)
         .addTo(vehicleLayer);
     }
   } catch (err) {

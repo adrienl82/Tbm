@@ -243,7 +243,12 @@ ul {
   overflow: hidden;
 }
 
+.vehicle-marker {
+  position: relative;
+}
+
 .vehicle-badge {
+  position: relative;
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -255,4 +260,35 @@ ul {
   font-size: 12px;
   border: 2px solid #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+/* A stopped vehicle is dimmed and static; a moving one keeps full color and
+   grows a pulsing halo behind it -- a common "live" indicator so the two
+   states read apart at a glance without needing a legend. */
+.vehicle-marker.is-stopped .vehicle-badge {
+  opacity: 0.55;
+}
+
+.vehicle-pulse {
+  display: none;
+}
+
+.vehicle-marker.is-moving .vehicle-pulse {
+  display: block;
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  opacity: 0.55;
+  animation: vehicle-pulse 1.6s ease-out infinite;
+}
+
+@keyframes vehicle-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
 }

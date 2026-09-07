@@ -49,6 +49,30 @@ test("parseVehiclePositions exposes id, label and bearing when present", () => {
   assert.equal(vehicle.bearing, 180);
 });
 
+test("parseVehiclePositions reports a stopped vehicle as not moving", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 }, currentStatus: 1 } },
+  ]);
+  assert.equal(parseVehiclePositions(decoded, "59")[0].moving, false);
+});
+
+test("parseVehiclePositions reports incoming-at or in-transit vehicles as moving", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 }, currentStatus: 0 } },
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.85, longitude: -0.58 }, currentStatus: 2 } },
+  ]);
+  const vehicles = parseVehiclePositions(decoded, "59");
+  assert.equal(vehicles[0].moving, true);
+  assert.equal(vehicles[1].moving, true);
+});
+
+test("parseVehiclePositions defaults to moving when current_status is absent", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 } } },
+  ]);
+  assert.equal(parseVehiclePositions(decoded, "59")[0].moving, true);
+});
+
 test("parseVehiclePositions falls back to the trip id when the vehicle has no id", () => {
   const decoded = decodedWith([
     { vehicle: { trip: { routeId: "59", tripId: "trip-1" }, position: { latitude: 44.84, longitude: -0.57 } } },

@@ -42,10 +42,17 @@ message Position {
   optional float bearing = 3;
 }
 
+enum VehicleStopStatus {
+  INCOMING_AT = 0;
+  STOPPED_AT = 1;
+  IN_TRANSIT_TO = 2;
+}
+
 message VehiclePosition {
   optional TripDescriptor trip = 1;
   optional VehicleDescriptor vehicle = 8;
   optional Position position = 2;
+  optional VehicleStopStatus current_status = 4 [default = IN_TRANSIT_TO];
   optional uint64 timestamp = 5;
 }
 `;
@@ -58,6 +65,11 @@ function getFeedMessageType(pbLib) {
   }
   return feedMessageType;
 }
+
+// GTFS-RT's VehicleStopStatus enum (see the embedded schema above): a
+// vehicle is only genuinely stationary when it's STOPPED_AT a stop --
+// INCOMING_AT and IN_TRANSIT_TO both mean it's still moving.
+const STOPPED_AT = 1;
 
 // decoded is the plain object form of a FeedMessage (FeedMessage.toObject()).
 // routeId is the bare numeric line id (see lineShapes.js's lineNumericId).
@@ -79,6 +91,7 @@ export function parseVehiclePositions(decoded, routeId) {
       latitude: position.latitude,
       longitude: position.longitude,
       bearing: typeof position.bearing === "number" ? position.bearing : null,
+      moving: vehicle.currentStatus !== STOPPED_AT,
     });
   }
   return vehicles;
