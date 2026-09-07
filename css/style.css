@@ -173,23 +173,36 @@ ul {
   border-bottom: none;
 }
 
-.line-row {
+#search-results.lines-grid {
   display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.line-name {
-  flex: 1;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+  padding: 4px 4px 12px;
 }
 
 .line-group-heading {
-  padding: 14px 12px 6px;
+  flex-basis: 100%;
+  padding: 12px 8px 2px;
   font-weight: 700;
   color: var(--muted);
   background: transparent;
   cursor: default;
   border-bottom: none;
+}
+
+.line-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 40px;
+  height: 40px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
 }
 
 .passage-row {

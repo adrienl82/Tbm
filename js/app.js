@@ -137,21 +137,30 @@ function lineGroupHeading(text) {
   return li;
 }
 
-function lineRowElement(line, onSelect) {
-  const li = document.createElement("li");
-  li.className = "stop-row line-row";
+// A compact colored square showing just the line code (à la TBM's own site)
+// -- solid fill for both tram and bus here, unlike the plain-text tram /
+// badge-only-for-some-buses style used inline in a passage row.
+function lineBadgeElement(line, onSelect) {
   const passage = lineAsPassage(line);
+  const li = document.createElement("li");
+  li.className = "line-badge";
+  li.textContent = line.code;
 
-  const badge = document.createElement("span");
-  badge.className = "passage-line";
-  badge.textContent = `${line.mode === "tram" ? "Tram" : "Bus"} ${line.code}`;
-  applyLineBadgeStyle(badge, passage);
+  if (line.mode === "tram") {
+    li.style.background = TRAM_LINE_COLORS[line.code] ?? DEFAULT_LINE_COLOR;
+    li.style.color = "#ffffff";
+  } else {
+    const style = busLineStyle(passage);
+    if (style?.outline) {
+      li.style.background = "#ffffff";
+      li.style.color = style.outline;
+      li.style.border = `2px solid ${style.outline}`;
+    } else {
+      li.style.background = style?.background ?? DEFAULT_LINE_COLOR;
+      li.style.color = style?.color ?? "#ffffff";
+    }
+  }
 
-  const name = document.createElement("span");
-  name.className = "line-name";
-  name.textContent = line.name;
-
-  li.append(badge, name);
   li.addEventListener("click", () => onSelect(passage));
   return li;
 }
@@ -166,6 +175,7 @@ function sortByCode(lines) {
 async function renderLinesBrowser() {
   const resultsEl = document.getElementById("search-results");
   resultsEl.innerHTML = "";
+  resultsEl.classList.add("lines-grid");
   const lines = await client.listLines();
   const modes = selectedModes();
   const wantsTram = !modes || modes.includes("tram");
@@ -175,14 +185,14 @@ async function renderLinesBrowser() {
     const trams = sortByCode(lines.filter((line) => line.mode === "tram"));
     if (trams.length > 0) {
       resultsEl.appendChild(lineGroupHeading("Trams"));
-      for (const line of trams) resultsEl.appendChild(lineRowElement(line, openLineMap));
+      for (const line of trams) resultsEl.appendChild(lineBadgeElement(line, openLineMap));
     }
   }
   if (wantsBus) {
     const buses = sortByCode(lines.filter((line) => line.mode === "bus"));
     if (buses.length > 0) {
       resultsEl.appendChild(lineGroupHeading("Bus"));
-      for (const line of buses) resultsEl.appendChild(lineRowElement(line, openLineMap));
+      for (const line of buses) resultsEl.appendChild(lineBadgeElement(line, openLineMap));
     }
   }
 }
@@ -240,6 +250,7 @@ async function runSearch(query) {
     return;
   }
   const resultsEl = document.getElementById("search-results");
+  resultsEl.classList.remove("lines-grid");
   resultsEl.innerHTML = "";
   const stops = await client.searchStops(query, { modes: selectedModes() });
   for (const stop of stops) {
