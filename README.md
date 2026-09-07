@@ -7,9 +7,8 @@ comme n'importe quel site.
 
 ## Source des donnees
 
-TBM ne publie pas de veritable flux RSS : les horaires temps reel sont
-exposes par Bordeaux Metropole via le web service public **SIRI-Lite**
-(JSON), documente sur
+Les horaires temps reel sont exposes par Bordeaux Metropole via le web
+service public **SIRI-Lite** (JSON), documente sur
 [transport.data.gouv.fr](https://transport.data.gouv.fr/datasets/offres-de-services-bus-tram-et-scolaire-au-format-gtfs-netex-gtfs-rt-siri-lite).
 Cette API envoie des en-tetes CORS permissifs, donc **le navigateur l'appelle
 directement**, sans serveur intermediaire :

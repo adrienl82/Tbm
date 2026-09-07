@@ -1,7 +1,7 @@
 // Client for Bordeaux Metropole's public SIRI-Lite real-time transport feed.
 //
-// TBM does not expose a plain RSS feed. Real-time bus/tram data is published
-// as JSON through the SIRI-Lite web services documented on
+// Real-time bus/tram data is published as JSON through the SIRI-Lite web
+// services documented on
 // https://transport.data.gouv.fr/datasets/offres-de-services-bus-tram-et-scolaire-au-format-gtfs-netex-gtfs-rt-siri-lite
 // using the shared public account key below (no registration needed). The
 // API sends permissive CORS headers, so the browser can call it directly
