@@ -274,6 +274,8 @@ let vehicleLayer = null;
 let vehicleRefreshTimer = null;
 let currentLinePassage = null;
 let mapReturnScreen = "search";
+let geoRequestId = 0;
+let userLocationMarker = null;
 
 function ensureLineMap() {
   if (lineMap) return lineMap;
@@ -316,6 +318,41 @@ async function refreshVehicles(passage) {
   } catch (err) {
     console.error("Impossible de charger les positions des vehicules :", err);
   }
+}
+
+// Extends the route/stops view to also include the user's live position,
+// rather than centering tightly on them alone -- that would cut off the
+// route context they opened the map to see. Marked directly on the map
+// object (not one of the layer groups openLineMap() clears) so it survives
+// switching lines; a request id discards a stale fix if the user switches
+// lines again before it resolves. Silent on failure/denial: this is a
+// progressive enhancement, not something worth showing an error for.
+function centerOnUserLocation(map, fitPoints) {
+  if (!navigator.geolocation) return;
+  const requestId = ++geoRequestId;
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      if (requestId !== geoRequestId) return;
+      const userPoint = [position.coords.latitude, position.coords.longitude];
+      if (userLocationMarker) userLocationMarker.remove();
+      userLocationMarker = L.circleMarker(userPoint, {
+        radius: 8,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#1a73e8",
+        fillOpacity: 1,
+      })
+        .bindTooltip("Vous etes ici")
+        .addTo(map);
+      const bounds = L.latLngBounds(fitPoints.length > 0 ? fitPoints : [userPoint]);
+      bounds.extend(userPoint);
+      map.fitBounds(bounds, { padding: [20, 20] });
+    },
+    (err) => {
+      console.warn("Geolocalisation indisponible :", err.message);
+    },
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+  );
 }
 
 async function openLineMap(passage) {
@@ -386,6 +423,7 @@ async function openLineMap(passage) {
   // checked out, otherwise the stops so the map still lands on the line.
   const fitPoints = routeBounds.length > 0 ? routeBounds : stopPoints;
   if (fitPoints.length > 0) map.fitBounds(fitPoints, { padding: [20, 20] });
+  centerOnUserLocation(map, fitPoints);
 
   refreshVehicles(passage);
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
