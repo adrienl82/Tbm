@@ -185,7 +185,7 @@ ul {
 .passage-line {
   font-weight: 700;
   color: var(--accent);
-  min-width: 2.5em;
+  min-width: 4.5em;
 }
 
 .passage-destination {

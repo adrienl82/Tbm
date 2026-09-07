@@ -35,7 +35,7 @@ function passageRowElement(passage) {
 
   const code = document.createElement("span");
   code.className = "passage-line";
-  code.textContent = passage.lineCode;
+  code.textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
 
   const dest = document.createElement("span");
   dest.className = "passage-destination";
