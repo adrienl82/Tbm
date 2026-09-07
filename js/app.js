@@ -15,6 +15,16 @@ const screens = {
 let refreshTimer = null;
 let currentStop = null;
 
+// Official TBM tram line colors (bus lines keep the default accent color).
+const TRAM_LINE_COLORS = {
+  A: "#802991", // Violet
+  B: "#EE154A", // Rouge
+  C: "#D34F98", // Rose
+  D: "#8B64A5", // Violet clair / Parme
+  E: "#80684C", // Brun / Taupe
+  F: "#E8822F", // Orange
+};
+
 function showScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
     el.hidden = key !== name;
@@ -36,6 +46,8 @@ function passageRowElement(passage) {
   const code = document.createElement("span");
   code.className = "passage-line";
   code.textContent = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
+  const tramColor = passage.mode === "tram" ? TRAM_LINE_COLORS[passage.lineCode] : null;
+  if (tramColor) code.style.color = tramColor;
 
   const dest = document.createElement("span");
   dest.className = "passage-destination";
