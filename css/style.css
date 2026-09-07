@@ -56,10 +56,19 @@ section[hidden] {
   display: none;
 }
 
-h1 {
+#home-link {
+  display: block;
   font-size: 1.4rem;
-  margin: 8px 0 16px;
+  font-weight: 700;
+  margin: 16px 16px 0;
+  padding: 0 0 8px;
+  background: none;
+  border: none;
+  border-radius: 0;
   color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 h2 {

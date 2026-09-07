@@ -60,27 +60,17 @@ function selectedModes() {
   return null; // neither: shouldn't happen, at least one stays checked
 }
 
-// Keeps the URL's query string (?q=...&modes=tram&modes=bus) in sync with
-// the form so a page refresh -- or a bookmarked/shared link -- restores the
-// exact same search and filters. Built straight from the form's own GET
-// encoding (FormData) rather than a bespoke format.
-function syncUrlFromForm() {
+// Keeps the URL's query string (?arret=...&modes=tram&modes=bus[&stop=ref])
+// in sync with the current form/screen so a page refresh -- or a
+// bookmarked/shared link -- restores the exact same search, filters, and
+// (if one was open) stop board. The arret/modes part is built straight from
+// the form's own GET encoding (FormData); stopRef is added on top when a
+// board is showing.
+function syncUrl(stopRef = null) {
   const params = new URLSearchParams(new FormData(searchForm));
+  if (stopRef) params.set("stop", stopRef);
   const search = params.toString();
   history.replaceState(null, "", search ? `?${search}` : location.pathname);
-}
-
-function restoreFromUrl() {
-  const params = new URLSearchParams(location.search);
-  document.getElementById("search-input").value = params.get("q") ?? "";
-  const modes = params.getAll("modes");
-  if (modes.length > 0) {
-    document.getElementById("filter-tram").checked = modes.includes("tram");
-    document.getElementById("filter-bus").checked = modes.includes("bus");
-  }
-  if (!document.getElementById("filter-tram").checked && !document.getElementById("filter-bus").checked) {
-    document.getElementById("filter-tram").checked = true; // never leave both unchecked
-  }
 }
 
 async function runSearch(query) {
@@ -122,6 +112,7 @@ function openBoard(stop) {
   refreshBoard();
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(refreshBoard, REFRESH_INTERVAL_MS);
+  syncUrl(stop.ref);
 }
 
 async function renderFavorites() {
@@ -141,12 +132,12 @@ const searchForm = document.getElementById("search-form");
 
 searchForm.addEventListener("submit", (event) => {
   event.preventDefault(); // stay a live-updating SPA; the GET encoding is only used for the URL
-  syncUrlFromForm();
+  syncUrl();
   runSearch(document.getElementById("search-input").value);
 });
 
 document.getElementById("search-input").addEventListener("input", (event) => {
-  syncUrlFromForm();
+  syncUrl();
   runSearch(event.target.value);
 });
 
@@ -158,23 +149,24 @@ for (const id of ["filter-tram", "filter-bus"]) {
       event.target.checked = true; // keep at least one mode selected
       return;
     }
-    syncUrlFromForm();
+    syncUrl();
     runSearch(document.getElementById("search-input").value);
   });
 }
 
-document.getElementById("back-from-board").addEventListener("click", () => {
+function goHome() {
   if (refreshTimer) clearInterval(refreshTimer);
   showScreen("search");
-});
+  syncUrl(); // drop the ?stop= param, keep the search text/filters
+}
+
+document.getElementById("home-link").addEventListener("click", goHome);
+document.getElementById("back-from-board").addEventListener("click", goHome);
+document.getElementById("back-from-favorites").addEventListener("click", goHome);
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
   showScreen("favorites");
   await renderFavorites();
-});
-
-document.getElementById("back-from-favorites").addEventListener("click", () => {
-  showScreen("search");
 });
 
 document.getElementById("favorite-toggle").addEventListener("click", () => {
@@ -182,8 +174,33 @@ document.getElementById("favorite-toggle").addEventListener("click", () => {
   updateFavoriteButton();
 });
 
-showScreen("search");
-restoreFromUrl();
-if (document.getElementById("search-input").value) {
-  runSearch(document.getElementById("search-input").value);
+async function init() {
+  showScreen("search");
+
+  const params = new URLSearchParams(location.search);
+  document.getElementById("search-input").value = params.get("arret") ?? "";
+  const modes = params.getAll("modes");
+  if (modes.length > 0) {
+    document.getElementById("filter-tram").checked = modes.includes("tram");
+    document.getElementById("filter-bus").checked = modes.includes("bus");
+  }
+  if (!document.getElementById("filter-tram").checked && !document.getElementById("filter-bus").checked) {
+    document.getElementById("filter-tram").checked = true; // never leave both unchecked
+  }
+
+  const stopRef = params.get("stop");
+  if (stopRef) {
+    const stops = await client.listStops();
+    const stop = stops.find((s) => s.ref === stopRef || s.refs.includes(stopRef));
+    if (stop) {
+      openBoard(stop); // refreshing the board page reopens the same stop instead of losing it
+      return;
+    }
+  }
+
+  if (document.getElementById("search-input").value) {
+    runSearch(document.getElementById("search-input").value);
+  }
 }
+
+init();

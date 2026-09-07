@@ -8,10 +8,17 @@
   </head>
   <body>
     <main id="app">
+      <button id="home-link" type="button">TBM Temps Reel</button>
+
       <section id="screen-search">
-        <h1>TBM Temps Reel</h1>
         <form id="search-form" method="get">
-          <input id="search-input" name="q" type="search" placeholder="Rechercher un arret (ex: Quinconces)" />
+          <input
+            id="search-input"
+            name="arret"
+            type="search"
+            autocomplete="off"
+            placeholder="Rechercher un arret (ex: Quinconces)"
+          />
           <div class="mode-filters">
             <label><input type="checkbox" id="filter-tram" name="modes" value="tram" checked /> Tram</label>
             <label><input type="checkbox" id="filter-bus" name="modes" value="bus" checked /> Bus</label>
