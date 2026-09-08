@@ -61,7 +61,16 @@
         </header>
         <p id="map-status" class="status"></p>
         <div id="line-map"></div>
-        <p id="vehicle-stats" class="status stats" hidden></p>
+        <table id="vehicle-stats" class="stats-table" hidden>
+          <caption id="vehicle-stats-caption"></caption>
+          <thead>
+            <tr>
+              <th>Sens</th>
+              <th>Vehicules</th>
+            </tr>
+          </thead>
+          <tbody id="vehicle-stats-body"></tbody>
+        </table>
         <p id="line-incident" class="status incident" hidden></p>
       </section>
     </main>

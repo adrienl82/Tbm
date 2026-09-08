@@ -1,7 +1,12 @@
 import { TbmClient, stopNumericId } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes, lineNumericId } from "./lineShapes.js";
-import { fetchActiveRouteIds, fetchVehiclePositions, summarizeByDirection } from "./vehiclePositions.js";
+import {
+  fetchActiveRouteIds,
+  fetchVehiclePositions,
+  fetchVehiclePositionsForRoutes,
+  summarizeByDirection,
+} from "./vehiclePositions.js";
 import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 import {
   distanceToStopAhead,
@@ -145,10 +150,24 @@ function stopRowElement(stop, onSelect) {
   return li;
 }
 
-function lineGroupHeading(text) {
+// onSelect, when given, makes the heading itself open a live map of every
+// vehicle of that mode (see openFleetMap) rather than just labelling the
+// list below it.
+function lineGroupHeading(text, onSelect) {
   const li = document.createElement("li");
   li.className = "line-group-heading";
   li.textContent = text;
+  if (onSelect) {
+    li.classList.add("clickable");
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.addEventListener("click", onSelect);
+    li.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      onSelect();
+    });
+  }
   return li;
 }
 
@@ -227,14 +246,14 @@ async function renderLinesBrowser() {
   if (wantsTram) {
     const trams = sortByCode(lines.filter((line) => line.mode === "tram" && inService(line)));
     if (trams.length > 0) {
-      resultsEl.appendChild(lineGroupHeading("Trams"));
+      resultsEl.appendChild(lineGroupHeading("Trams", () => openFleetMap("tram")));
       for (const line of trams) resultsEl.appendChild(lineBadgeElement(line, openLineMap));
     }
   }
   if (wantsBus) {
     const buses = sortByCode(lines.filter((line) => line.mode === "bus" && inService(line)));
     if (buses.length > 0) {
-      resultsEl.appendChild(lineGroupHeading("Bus"));
+      resultsEl.appendChild(lineGroupHeading("Bus", () => openFleetMap("bus")));
       for (const line of buses) resultsEl.appendChild(lineBadgeElement(line, openLineMap));
     }
   }
@@ -342,6 +361,13 @@ let followedVehicleId = null;
 // shape passed the cross-check against the line's stops.
 let currentRoutePolylines = [];
 let currentLinePassage = null;
+// Set instead of currentLinePassage when the map is showing every vehicle
+// of one mode (see openFleetMap) rather than a single line -- { mode,
+// linesById } where linesById maps each line's numeric id (lineNumericId)
+// to its Line, used to recover which line (and so which color/code) a
+// given vehicle belongs to. Exactly one of currentLinePassage /
+// currentFleetContext is non-null while the map screen is open.
+let currentFleetContext = null;
 let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
@@ -352,10 +378,26 @@ let lineMapRequestId = 0;
 function ensureLineMap() {
   if (lineMap) return lineMap;
   lineMap = L.map("line-map");
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19,
-  }).addTo(lineMap);
+  // A lighter, less cluttered basemap than the default OSM raster tiles'
+  // dense orange/yellow road network -- closer to how infotbm.com's own
+  // line maps read. (CARTO's Positron tiles are the closest visual match,
+  // but CARTO now requires a personal API key even for anonymous use, so
+  // this uses Esri's free-without-a-key Light Gray Canvas instead: a plain
+  // gray base layer plus a separate transparent overlay for roads/labels.)
+  const attribution =
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Esri, HERE, Garmin';
+  // maxNativeZoom: this service has no tiles past z16 for most areas (it
+  // serves an explicit "Map data not yet available" placeholder instead) --
+  // Leaflet upscales the z16 tile for deeper zoom levels rather than
+  // requesting one that doesn't exist.
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    { attribution, maxZoom: 19, maxNativeZoom: 16 },
+  ).addTo(lineMap);
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 19, maxNativeZoom: 16 },
+  ).addTo(lineMap);
   lineMapLayer = L.layerGroup().addTo(lineMap);
   stopMarkersLayer = L.layerGroup().addTo(lineMap);
   vehicleLayer = L.layerGroup().addTo(lineMap);
@@ -385,6 +427,34 @@ function vehicleDivIcon(letter, color, moving, followed, stalled) {
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });
+}
+
+// The letter/color/fallback tooltip title a vehicle marker should use --
+// the same for every vehicle in single-line mode (currentLinePassage), but
+// resolved per vehicle in fleet mode (currentFleetContext) since a fleet
+// view mixes vehicles from several different lines, each with its own
+// color. Falls back to a plain default when a fleet vehicle's route_id
+// isn't one of this mode's known lines (a brand-new or renamed line the
+// static line list doesn't have yet).
+function vehicleStyle(vehicle) {
+  if (currentLinePassage) {
+    const passage = currentLinePassage;
+    return {
+      letter: passage.mode === "tram" ? "T" : "B",
+      color: passageAccentColor(passage),
+      fallbackLabel: `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`,
+    };
+  }
+  const { mode, linesById } = currentFleetContext;
+  const letter = mode === "tram" ? "T" : "B";
+  const modeLabel = mode === "tram" ? "Tram" : "Bus";
+  const line = linesById.get(vehicle.routeId);
+  if (!line) return { letter, color: DEFAULT_LINE_COLOR, fallbackLabel: modeLabel };
+  return {
+    letter,
+    color: passageAccentColor(lineAsPassage(line)),
+    fallbackLabel: `${modeLabel} ${line.code}`,
+  };
 }
 
 // Builds the vehicle's tooltip: its destination, then either its speed and
@@ -429,12 +499,11 @@ const POSITION_TRANSITION_MS = 2000;
 function setFollowedVehicle(id) {
   const previousId = followedVehicleId;
   followedVehicleId = previousId === id ? null : id;
-  if (!currentLinePassage) return;
-  const letter = currentLinePassage.mode === "tram" ? "T" : "B";
-  const color = passageAccentColor(currentLinePassage);
+  if (!currentLinePassage && !currentFleetContext) return;
   for (const entry of activeVehicles) {
     if (entry.vehicle.id !== previousId && entry.vehicle.id !== followedVehicleId) continue;
     const isFollowed = entry.vehicle.id === followedVehicleId;
+    const { letter, color } = vehicleStyle(entry.vehicle);
     entry.marker.setIcon(vehicleDivIcon(letter, color, entry.vehicle.moving, isFollowed, entry.isStalled));
     if (isFollowed) entry.marker.openTooltip();
   }
@@ -455,136 +524,168 @@ function updateLineIncidentStatus(stalledCount) {
   el.hidden = false;
 }
 
-// Small per-line, per-direction recap shown below the map: how many
-// vehicles are currently in circulation, split by direction (see
-// summarizeByDirection) so "3 en direction de X, 2 en direction de Y" reads
-// at a glance instead of just a single total.
+// Small per-line, per-direction recap shown below the map as a table: one
+// row per direction (see summarizeByDirection), so "2 vers X, 4 vers Y"
+// reads at a glance instead of just a single total.
 function updateVehicleStats(vehicles, passage) {
-  const el = document.getElementById("vehicle-stats");
+  const table = document.getElementById("vehicle-stats");
+  const body = document.getElementById("vehicle-stats-body");
+  body.innerHTML = "";
   if (vehicles.length === 0) {
-    el.hidden = true;
+    table.hidden = true;
     return;
   }
-  const vehicleWord = (count) => {
-    const noun = passage.mode === "tram" ? "tram" : "bus";
-    return count > 1 ? `${count} ${noun}s` : `${count} ${noun}`;
-  };
-  const directions = summarizeByDirection(vehicles);
-  if (directions.length <= 1) {
-    const label = directions[0]?.label;
-    el.textContent = `${vehicleWord(vehicles.length)} en circulation${label ? ` vers ${label}` : ""}`;
-  } else {
-    const parts = directions.map((direction) =>
-      direction.label ? `${vehicleWord(direction.count)} vers ${direction.label}` : vehicleWord(direction.count),
-    );
-    el.textContent = `${vehicleWord(vehicles.length)} en circulation : ${parts.join(" - ")}`;
+  const noun = passage.mode === "tram" ? "tram" : "bus";
+  const vehicleCount = (count) => `${count} ${noun}${count > 1 ? "s" : ""}`;
+
+  document.getElementById("vehicle-stats-caption").textContent =
+    `${vehicleCount(vehicles.length)} en circulation`;
+
+  for (const direction of summarizeByDirection(vehicles)) {
+    const row = document.createElement("tr");
+    const sensCell = document.createElement("td");
+    // Destination labels come straight from TBM's live feed -- textContent
+    // rather than innerHTML so nothing in there is ever parsed as markup.
+    sensCell.textContent = direction.label ? `Vers ${direction.label}` : "Sens inconnu";
+    const countCell = document.createElement("td");
+    countCell.textContent = String(direction.count);
+    row.append(sensCell, countCell);
+    body.appendChild(row);
   }
-  el.hidden = false;
+  table.hidden = false;
 }
 
-async function refreshVehicles(passage) {
-  if (!passage || !vehicleLayer) return;
-  const letter = passage.mode === "tram" ? "T" : "B";
-  const label = `${passage.mode === "tram" ? "Tram" : "Bus"} ${passage.lineCode}`;
-  try {
-    const vehicles = await fetchVehiclePositions(passage.lineRef);
-    // The user may have switched to a different line (or closed the map)
-    // while this fetch was in flight -- drop the response rather than
-    // paint another line's vehicles onto the one now showing.
-    if (currentLinePassage?.lineRef !== passage.lineRef) return;
-    const color = passageAccentColor(passage);
+// Rebuilds the vehicle markers layer from a fresh vehicle list, matched by
+// id against the previous refresh's markers so a vehicle already on screen
+// keeps the same marker -- and so its open tooltip, follow ring and
+// in-flight position transition survive -- instead of being torn down and
+// rebuilt from scratch every refresh. Shared between single-line mode and
+// the fleet ("every tram"/"every bus") map: vehicleStyle(vehicle) resolves
+// each vehicle's own letter/color/fallback label, which differs per vehicle
+// in fleet mode since several lines show at once. Returns how many of the
+// given vehicles are currently stalled.
+function syncVehicleMarkers(vehicles) {
+  const previousById = new Map(activeVehicles.filter((entry) => entry.vehicle.id).map((entry) => [entry.vehicle.id, entry]));
+  const seenIds = new Set();
+  const nextActiveVehicles = [];
 
-    // Matched by vehicle id so a vehicle already on screen keeps the same
-    // marker (and so its open tooltip / follow ring / in-flight position
-    // transition survive) instead of being torn down and rebuilt from
-    // scratch every refresh.
-    const previousById = new Map(activeVehicles.filter((entry) => entry.vehicle.id).map((entry) => [entry.vehicle.id, entry]));
-    const seenIds = new Set();
-    const nextActiveVehicles = [];
+  for (const vehicle of vehicles) {
+    const isFollowed = Boolean(vehicle.id) && vehicle.id === followedVehicleId;
+    const previous = vehicle.id ? previousById.get(vehicle.id) : null;
+    if (vehicle.id) seenIds.add(vehicle.id);
 
-    for (const vehicle of vehicles) {
+    // How long this vehicle has been continuously stopped, carried
+    // forward across refreshes (matched by id) rather than reset every
+    // time -- a single fix's timestamp only says when it was last
+    // observed, not how long it's actually been sitting there.
+    const stalledSince = trackStalledSince(vehicle.moving, previous?.stalledSince ?? null, Date.now());
+    const vehicleIsStalled = isStalled(stalledSince, Date.now(), STALLED_THRESHOLD_MS);
+
+    const { letter, color, fallbackLabel } = vehicleStyle(vehicle);
+    const icon = vehicleDivIcon(letter, color, vehicle.moving, isFollowed, vehicleIsStalled);
+
+    let marker;
+    let transition = null;
+    if (previous) {
+      marker = previous.marker;
+      // Ease from wherever the marker is actually displayed right now
+      // (its dead-reckoned estimate) to this fresh fix, rather than
+      // jumping straight to it -- animateVehicles() blends the two over
+      // POSITION_TRANSITION_MS.
+      const current = marker.getLatLng();
+      transition = { from: [current.lat, current.lng], start: Date.now() };
+      marker.setIcon(icon);
+      marker.setTooltipContent(vehicleTooltip(vehicle, fallbackLabel, vehicleIsStalled, stalledSince));
+    } else {
+      marker = L.marker([vehicle.latitude, vehicle.longitude], { icon })
+        // A fixed direction (rather than Leaflet's default "auto", which
+        // picks left/right based on space around the marker) matters most
+        // for a followed vehicle: it sits pinned at the map's center, so
+        // "auto" would otherwise flip sides on the smallest jitter.
+        .bindTooltip(vehicleTooltip(vehicle, fallbackLabel, vehicleIsStalled, stalledSince), {
+          direction: "top",
+          offset: [0, -14],
+          className: "vehicle-tooltip",
+        })
+        .addTo(vehicleLayer);
+      if (vehicle.id) {
+        marker.on("click", () => setFollowedVehicle(vehicle.id));
+      }
+    }
+    // A freshly (re)opened tooltip so the selection reads as continuous
+    // across refreshes instead of closing and reopening.
+    if (isFollowed) marker.openTooltip();
+
+    nextActiveVehicles.push({
+      vehicle,
+      marker,
+      transition,
+      stalledSince,
+      isStalled: vehicleIsStalled,
+      // Distance to the line's own closest stop actually ahead of this
+      // vehicle at this last known fix -- animateVehicles() uses it so a
+      // fast vehicle's estimated position never creeps past a stop it's
+      // about to reach before its next fix. Always null in fleet mode
+      // (no single line's stops are loaded there), which simply means no
+      // braking is applied -- the same graceful fallback as a line whose
+      // own route shape/stops didn't check out.
+      nearestStopMeters: distanceToStopAhead([vehicle.latitude, vehicle.longitude], vehicle.bearing, currentStopPoints),
+    });
+  }
+
+  // Vehicles from the previous refresh that no longer appear (finished
+  // service, or a matched marker was already reused above) get removed.
+  for (const [id, entry] of previousById) {
+    if (!seenIds.has(id)) vehicleLayer.removeLayer(entry.marker);
+  }
+  // Vehicles with no id could never be matched for reuse; the old ones
+  // among them are stale copies still sitting on the layer.
+  for (const entry of activeVehicles) {
+    if (!entry.vehicle.id) vehicleLayer.removeLayer(entry.marker);
+  }
+
+  activeVehicles = nextActiveVehicles;
+  return nextActiveVehicles.filter((entry) => entry.isStalled).length;
+}
+
+async function refreshVehicles() {
+  if (!vehicleLayer) return;
+  if (currentLinePassage) {
+    const passage = currentLinePassage;
+    try {
+      const vehicles = await fetchVehiclePositions(passage.lineRef);
+      // The user may have switched to a different line (or closed the map)
+      // while this fetch was in flight -- drop the response rather than
+      // paint another line's vehicles onto the one now showing.
+      if (currentLinePassage?.lineRef !== passage.lineRef) return;
       // TBM's GTFS-RT feed occasionally mistags a vehicle with the wrong
       // route_id -- it then reports a real position, just nowhere near this
       // line's own stops. Drop it rather than show it confidently in the
       // wrong place.
-      if (!isNearAnyPoint([vehicle.latitude, vehicle.longitude], currentStopPoints, VEHICLE_STOP_DISTANCE_METERS)) {
-        continue;
-      }
-      const isFollowed = Boolean(vehicle.id) && vehicle.id === followedVehicleId;
-      const previous = vehicle.id ? previousById.get(vehicle.id) : null;
-      if (vehicle.id) seenIds.add(vehicle.id);
-
-      // How long this vehicle has been continuously stopped, carried
-      // forward across refreshes (matched by id) rather than reset every
-      // time -- a single fix's timestamp only says when it was last
-      // observed, not how long it's actually been sitting there.
-      const stalledSince = trackStalledSince(vehicle.moving, previous?.stalledSince ?? null, Date.now());
-      const vehicleIsStalled = isStalled(stalledSince, Date.now(), STALLED_THRESHOLD_MS);
-
-      const icon = vehicleDivIcon(letter, color, vehicle.moving, isFollowed, vehicleIsStalled);
-
-      let marker;
-      let transition = null;
-      if (previous) {
-        marker = previous.marker;
-        // Ease from wherever the marker is actually displayed right now
-        // (its dead-reckoned estimate) to this fresh fix, rather than
-        // jumping straight to it -- animateVehicles() blends the two over
-        // POSITION_TRANSITION_MS.
-        const current = marker.getLatLng();
-        transition = { from: [current.lat, current.lng], start: Date.now() };
-        marker.setIcon(icon);
-        marker.setTooltipContent(vehicleTooltip(vehicle, label, vehicleIsStalled, stalledSince));
-      } else {
-        marker = L.marker([vehicle.latitude, vehicle.longitude], { icon })
-          // A fixed direction (rather than Leaflet's default "auto", which
-          // picks left/right based on space around the marker) matters most
-          // for a followed vehicle: it sits pinned at the map's center, so
-          // "auto" would otherwise flip sides on the smallest jitter.
-          .bindTooltip(vehicleTooltip(vehicle, label, vehicleIsStalled, stalledSince), {
-            direction: "top",
-            offset: [0, -14],
-            className: "vehicle-tooltip",
-          })
-          .addTo(vehicleLayer);
-        if (vehicle.id) {
-          marker.on("click", () => setFollowedVehicle(vehicle.id));
-        }
-      }
-      // A freshly (re)opened tooltip so the selection reads as continuous
-      // across refreshes instead of closing and reopening.
-      if (isFollowed) marker.openTooltip();
-
-      nextActiveVehicles.push({
-        vehicle,
-        marker,
-        transition,
-        stalledSince,
-        isStalled: vehicleIsStalled,
-        // Distance to the line's own closest stop actually ahead of this
-        // vehicle at this last known fix -- animateVehicles() uses it so a
-        // fast vehicle's estimated position never creeps past a stop it's
-        // about to reach before its next fix.
-        nearestStopMeters: distanceToStopAhead([vehicle.latitude, vehicle.longitude], vehicle.bearing, currentStopPoints),
-      });
+      const filtered = vehicles.filter((vehicle) =>
+        isNearAnyPoint([vehicle.latitude, vehicle.longitude], currentStopPoints, VEHICLE_STOP_DISTANCE_METERS),
+      );
+      const stalledCount = syncVehicleMarkers(filtered);
+      updateVehicleStats(filtered, passage);
+      updateLineIncidentStatus(stalledCount);
+    } catch (err) {
+      console.error("Impossible de charger les positions des vehicules :", err);
     }
-
-    // Vehicles from the previous refresh that no longer appear (finished
-    // service, or a matched marker was already reused above) get removed.
-    for (const [id, entry] of previousById) {
-      if (!seenIds.has(id)) vehicleLayer.removeLayer(entry.marker);
+    return;
+  }
+  if (currentFleetContext) {
+    const context = currentFleetContext;
+    try {
+      const vehicles = await fetchVehiclePositionsForRoutes(new Set(context.linesById.keys()));
+      // The user may have switched mode (or closed the map) while this
+      // fetch was in flight.
+      if (currentFleetContext !== context) return;
+      syncVehicleMarkers(vehicles);
+      document.getElementById("map-status").textContent =
+        `${vehicles.length} ${context.mode === "tram" ? "trams" : "bus"} en circulation`;
+    } catch (err) {
+      console.error("Impossible de charger les positions des vehicules :", err);
     }
-    // Vehicles with no id could never be matched for reuse; the old ones
-    // among them are stale copies still sitting on the layer.
-    for (const entry of activeVehicles) {
-      if (!entry.vehicle.id) vehicleLayer.removeLayer(entry.marker);
-    }
-
-    activeVehicles = nextActiveVehicles;
-    updateVehicleStats(nextActiveVehicles.map((entry) => entry.vehicle), passage);
-    updateLineIncidentStatus(nextActiveVehicles.filter((entry) => entry.isStalled).length);
-  } catch (err) {
-    console.error("Impossible de charger les positions des vehicules :", err);
   }
 }
 
@@ -675,6 +776,7 @@ async function openLineMap(passage) {
   requestAnimationFrame(() => map.invalidateSize());
 
   currentLinePassage = passage;
+  currentFleetContext = null;
   followedVehicleId = null;
   lineMapLayer.clearLayers();
   stopMarkersLayer.clearLayers();
@@ -741,9 +843,62 @@ async function openLineMap(passage) {
   if (fitPoints.length > 0) map.fitBounds(fitPoints, { padding: [20, 20] });
   centerOnUserLocation(map);
 
-  refreshVehicles(passage);
+  refreshVehicles();
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
-  vehicleRefreshTimer = setInterval(() => refreshVehicles(currentLinePassage), REFRESH_INTERVAL_MS);
+  vehicleRefreshTimer = setInterval(refreshVehicles, REFRESH_INTERVAL_MS);
+  if (vehicleAnimationFrame) cancelAnimationFrame(vehicleAnimationFrame);
+  vehicleAnimationFrame = requestAnimationFrame(animateVehicles);
+}
+
+// Shows every vehicle of one mode (every tram, or every bus) at once,
+// rather than a single line's -- opened by tapping the "Trams"/"Bus"
+// heading on the home line list. Skips loading any one line's stops/route
+// shape (there isn't a single line to show them for), so vehicles are
+// dead-reckoned in a plain straight line with no stop-approach braking,
+// and there's no per-line incident/stats recap below the map -- just a
+// running vehicle count in the status line.
+async function openFleetMap(mode) {
+  const requestId = ++lineMapRequestId;
+  document.getElementById("map-title").textContent = mode === "tram" ? "Tous les trams" : "Tous les bus";
+  const statusEl = document.getElementById("map-status");
+  statusEl.textContent = "";
+  document.getElementById("line-incident").hidden = true;
+  document.getElementById("vehicle-stats").hidden = true;
+  mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
+  showScreen("map");
+  const map = ensureLineMap();
+  requestAnimationFrame(() => map.invalidateSize());
+
+  currentLinePassage = null;
+  followedVehicleId = null;
+  lineMapLayer.clearLayers();
+  stopMarkersLayer.clearLayers();
+  vehicleLayer.clearLayers();
+  activeVehicles = [];
+  currentRoutePolylines = [];
+  currentStopPoints = [];
+  currentStopNames = new Map();
+
+  let lines = [];
+  try {
+    lines = await client.listLines();
+  } catch (err) {
+    console.error("Impossible de charger les lignes :", err);
+  }
+  if (requestId !== lineMapRequestId) return;
+  const linesById = new Map(
+    lines.filter((line) => line.mode === mode).map((line) => [lineNumericId(line.ref), line]),
+  );
+  currentFleetContext = { mode, linesById };
+
+  // No single route to fit the view to -- start centered on Bordeaux itself,
+  // then centerOnUserLocation narrows in once geolocation resolves.
+  map.setView([44.84, -0.58], 12);
+  centerOnUserLocation(map);
+
+  refreshVehicles();
+  if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
+  vehicleRefreshTimer = setInterval(refreshVehicles, REFRESH_INTERVAL_MS);
   if (vehicleAnimationFrame) cancelAnimationFrame(vehicleAnimationFrame);
   vehicleAnimationFrame = requestAnimationFrame(animateVehicles);
 }
@@ -761,6 +916,7 @@ function closeLineMap() {
   currentRoutePolylines = [];
   followedVehicleId = null;
   currentLinePassage = null;
+  currentFleetContext = null;
 }
 
 function updateFavoriteButton() {

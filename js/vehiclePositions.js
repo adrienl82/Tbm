@@ -74,6 +74,30 @@ function getFeedMessageType(pbLib) {
 // INCOMING_AT and IN_TRANSIT_TO both mean it's still moving.
 const STOPPED_AT = 1;
 
+// Builds the app's own vehicle shape from one FeedEntity's VehiclePosition
+// (already confirmed to have a position) -- shared by parseVehiclePositions
+// (one specific line) and parseVehiclePositionsForRoutes (several at once,
+// for the "every line of this mode" fleet map), so a vehicle looks the same
+// either way.
+function buildVehicle(vehicle) {
+  const position = vehicle.position;
+  const routeId = vehicle.trip?.routeId;
+  return {
+    id: vehicle.vehicle?.id || vehicle.trip?.tripId || "",
+    label: vehicle.vehicle?.label ?? "",
+    routeId: routeId !== undefined && routeId !== null ? String(routeId) : null,
+    latitude: position.latitude,
+    longitude: position.longitude,
+    bearing: typeof position.bearing === "number" ? position.bearing : null,
+    speedKmh: typeof position.speed === "number" ? Math.round(position.speed * 3.6) : null,
+    stopId: vehicle.stopId || null,
+    directionId: typeof vehicle.trip?.directionId === "number" ? vehicle.trip.directionId : null,
+    moving: vehicle.currentStatus !== STOPPED_AT,
+    // GTFS-RT timestamps are Unix seconds.
+    timestamp: typeof vehicle.timestamp === "number" && vehicle.timestamp > 0 ? new Date(vehicle.timestamp * 1000) : null,
+  };
+}
+
 // decoded is the plain object form of a FeedMessage (FeedMessage.toObject()).
 // routeId is the bare numeric line id (see lineShapes.js's lineNumericId).
 // Vehicles with a missing position or a coordinate outside the sanity
@@ -88,19 +112,26 @@ export function parseVehiclePositions(decoded, routeId) {
     if (!vehicle || !position) continue;
     if (String(vehicle.trip?.routeId ?? "") !== String(routeId)) continue;
     if (!isValidCoordinate(position.latitude, position.longitude)) continue;
-    vehicles.push({
-      id: vehicle.vehicle?.id || vehicle.trip?.tripId || "",
-      label: vehicle.vehicle?.label ?? "",
-      latitude: position.latitude,
-      longitude: position.longitude,
-      bearing: typeof position.bearing === "number" ? position.bearing : null,
-      speedKmh: typeof position.speed === "number" ? Math.round(position.speed * 3.6) : null,
-      stopId: vehicle.stopId || null,
-      directionId: typeof vehicle.trip?.directionId === "number" ? vehicle.trip.directionId : null,
-      moving: vehicle.currentStatus !== STOPPED_AT,
-      // GTFS-RT timestamps are Unix seconds.
-      timestamp: typeof vehicle.timestamp === "number" && vehicle.timestamp > 0 ? new Date(vehicle.timestamp * 1000) : null,
-    });
+    vehicles.push(buildVehicle(vehicle));
+  }
+  return vehicles;
+}
+
+// Like parseVehiclePositions, but keeps every vehicle whose route_id is a
+// member of routeIds (a Set of numeric line ids as strings) instead of
+// matching one specific line -- used for the fleet map that shows every
+// tram (or every bus) at once rather than a single line.
+export function parseVehiclePositionsForRoutes(decoded, routeIds) {
+  const entities = decoded?.entity ?? [];
+  const vehicles = [];
+  for (const entity of entities) {
+    const vehicle = entity.vehicle;
+    const position = vehicle?.position;
+    if (!vehicle || !position) continue;
+    const routeId = vehicle.trip?.routeId;
+    if (routeId === undefined || routeId === null || !routeIds.has(String(routeId))) continue;
+    if (!isValidCoordinate(position.latitude, position.longitude)) continue;
+    vehicles.push(buildVehicle(vehicle));
   }
   return vehicles;
 }
@@ -190,4 +221,15 @@ export async function fetchVehiclePositions(lineRef, options = {}) {
 export async function fetchActiveRouteIds(options = {}) {
   const decoded = await fetchDecodedFeed(options);
   return decoded ? activeRouteIds(decoded) : new Set();
+}
+
+// Every vehicle on any of routeIds (a Set of numeric line ids as strings) --
+// the fleet map's "every tram" / "every bus" view fetches the feed once and
+// keeps every vehicle on one of that mode's lines, rather than one fetch per
+// line.
+export async function fetchVehiclePositionsForRoutes(routeIds, options = {}) {
+  if (!routeIds || routeIds.size === 0) return [];
+  const decoded = await fetchDecodedFeed(options);
+  if (!decoded) return [];
+  return parseVehiclePositionsForRoutes(decoded, routeIds);
 }

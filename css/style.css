@@ -195,6 +195,23 @@ ul {
   border-bottom: none;
 }
 
+/* Opens a live map of every vehicle of that mode at once (see
+   openFleetMap) -- an arrow hints it's actionable, not just a label. */
+.line-group-heading.clickable {
+  cursor: pointer;
+}
+
+.line-group-heading.clickable::after {
+  content: "→";
+  margin-left: 6px;
+  font-weight: 400;
+}
+
+.line-group-heading.clickable:hover,
+.line-group-heading.clickable:focus-visible {
+  color: var(--accent);
+}
+
 .line-badge {
   display: flex;
   align-items: center;
@@ -240,11 +257,36 @@ ul {
 }
 
 /* Small recap of vehicles currently in circulation on the open line, shown
-   right below the map -- a plain .status is muted/centered, which reads as
-   informational rather than a warning (contrast with .status.incident). */
-.status.stats {
+   right below the map as a table: one row per direction. */
+.stats-table {
+  width: 100%;
   margin-top: 10px;
+  border-collapse: collapse;
   font-size: 13px;
+}
+
+.stats-table caption {
+  text-align: left;
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.stats-table th,
+.stats-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.stats-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.stats-table td:last-child,
+.stats-table th:last-child {
+  text-align: right;
 }
 
 /* Shown below the map when several vehicles on the line have been stalled

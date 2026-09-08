@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { activeRouteIds, parseVehiclePositions, summarizeByDirection } from "../js/vehiclePositions.js";
+import {
+  activeRouteIds,
+  parseVehiclePositions,
+  parseVehiclePositionsForRoutes,
+  summarizeByDirection,
+} from "../js/vehiclePositions.js";
 
 function decodedWith(entities) {
   return { entity: entities };
@@ -191,4 +196,38 @@ test("summarizeByDirection picks the most common label per direction and sorts u
 
 test("summarizeByDirection handles an empty vehicle list", () => {
   assert.deepEqual(summarizeByDirection([]), []);
+});
+
+test("parseVehiclePositions exposes the route id as a string", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 } } },
+  ]);
+  assert.equal(parseVehiclePositions(decoded, "59")[0].routeId, "59");
+});
+
+test("parseVehiclePositionsForRoutes keeps vehicles on any of several routes", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 } } },
+    { vehicle: { trip: { routeId: "24" }, position: { latitude: 44.85, longitude: -0.58 } } },
+    { vehicle: { trip: { routeId: "60" }, position: { latitude: 44.86, longitude: -0.59 } } },
+  ]);
+  const vehicles = parseVehiclePositionsForRoutes(decoded, new Set(["59", "24"]));
+  assert.deepEqual(
+    vehicles.map((v) => v.routeId).sort(),
+    ["24", "59"],
+  );
+});
+
+test("parseVehiclePositionsForRoutes drops vehicles with no route id, a route id not in the set, or an invalid position", () => {
+  const decoded = decodedWith([
+    { vehicle: { position: { latitude: 44.84, longitude: -0.57 } } }, // no route id
+    { vehicle: { trip: { routeId: "60" }, position: { latitude: 44.84, longitude: -0.57 } } }, // not requested
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 0, longitude: 0 } } }, // GPS glitch
+  ]);
+  assert.deepEqual(parseVehiclePositionsForRoutes(decoded, new Set(["59"])), []);
+});
+
+test("parseVehiclePositionsForRoutes handles an empty or missing entity list", () => {
+  assert.deepEqual(parseVehiclePositionsForRoutes({}, new Set(["59"])), []);
+  assert.deepEqual(parseVehiclePositionsForRoutes(decodedWith([]), new Set(["59"])), []);
 });
