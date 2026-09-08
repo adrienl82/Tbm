@@ -356,6 +356,32 @@ ul {
   display: none;
 }
 
+/* A small triangle just outside the circle, pointing in the vehicle's own
+   reported bearing -- .vehicle-heading covers the same box as the badge so
+   rotating it (see app.js's vehicleDivIcon) turns the arrow around the
+   circle's own center rather than some other point. Dims along with the
+   badge itself when stopped, same as the pulse. */
+.vehicle-heading {
+  position: absolute;
+  inset: 0;
+}
+
+.vehicle-arrow {
+  position: absolute;
+  left: 50%;
+  top: -6px;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 7px solid; /* color set inline (see vehicleDivIcon) */
+}
+
+.vehicle-marker.is-stopped .vehicle-arrow {
+  opacity: 0.55;
+}
+
 .vehicle-marker.is-moving .vehicle-pulse {
   display: block;
   position: absolute;

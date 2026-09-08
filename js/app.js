@@ -418,12 +418,20 @@ function ensureLineMap() {
 // turns red regardless of its line's own color, and stays at full opacity
 // so it stands out rather than fading into the dimmed "stopped" look.
 // Tapping a marker follows it (see refreshVehicles/animateVehicles);
-// is-followed adds a visible ring so it's clear which one that is.
-function vehicleDivIcon(letter, color, moving, followed, stalled) {
+// is-followed adds a visible ring so it's clear which one that is. A small
+// triangle pointing in the vehicle's own reported bearing (0=north, as a
+// compass heading) sits just outside the circle, rotated around its
+// center -- omitted entirely when bearing isn't known rather than pointing
+// somewhere meaningless.
+function vehicleDivIcon(letter, color, moving, followed, stalled, bearing) {
   const badgeColor = stalled ? STALLED_COLOR : color;
+  const arrow =
+    bearing === null
+      ? ""
+      : `<div class="vehicle-heading" style="transform: rotate(${bearing}deg)"><div class="vehicle-arrow" style="border-bottom-color:${badgeColor}"></div></div>`;
   return L.divIcon({
     className: `vehicle-marker ${moving ? "is-moving" : "is-stopped"}${followed ? " is-followed" : ""}${stalled ? " is-stalled" : ""}`,
-    html: `<div class="vehicle-pulse" style="background:${badgeColor}"></div><div class="vehicle-badge" style="background:${badgeColor}">${letter}</div>`,
+    html: `<div class="vehicle-pulse" style="background:${badgeColor}"></div>${arrow}<div class="vehicle-badge" style="background:${badgeColor}">${letter}</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });
@@ -504,7 +512,7 @@ function setFollowedVehicle(id) {
     if (entry.vehicle.id !== previousId && entry.vehicle.id !== followedVehicleId) continue;
     const isFollowed = entry.vehicle.id === followedVehicleId;
     const { letter, color } = vehicleStyle(entry.vehicle);
-    entry.marker.setIcon(vehicleDivIcon(letter, color, entry.vehicle.moving, isFollowed, entry.isStalled));
+    entry.marker.setIcon(vehicleDivIcon(letter, color, entry.vehicle.moving, isFollowed, entry.isStalled, entry.vehicle.bearing));
     if (isFollowed) entry.marker.openTooltip();
   }
 }
@@ -582,7 +590,7 @@ function syncVehicleMarkers(vehicles) {
     const vehicleIsStalled = isStalled(stalledSince, Date.now(), STALLED_THRESHOLD_MS);
 
     const { letter, color, fallbackLabel } = vehicleStyle(vehicle);
-    const icon = vehicleDivIcon(letter, color, vehicle.moving, isFollowed, vehicleIsStalled);
+    const icon = vehicleDivIcon(letter, color, vehicle.moving, isFollowed, vehicleIsStalled, vehicle.bearing);
 
     let marker;
     let transition = null;
