@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { activeRouteIds, parseVehiclePositions } from "../js/vehiclePositions.js";
+import { activeRouteIds, parseVehiclePositions, summarizeByDirection } from "../js/vehiclePositions.js";
 
 function decodedWith(entities) {
   return { entity: entities };
@@ -148,4 +148,47 @@ test("activeRouteIds ignores vehicles with a missing or glitched (0,0) position"
 test("activeRouteIds handles an empty or missing entity list", () => {
   assert.deepEqual(activeRouteIds({}), new Set());
   assert.deepEqual(activeRouteIds(decodedWith([])), new Set());
+});
+
+test("parseVehiclePositions exposes the direction id when present", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59", directionId: 1 }, position: { latitude: 44.84, longitude: -0.57 } } },
+  ]);
+  assert.equal(parseVehiclePositions(decoded, "59")[0].directionId, 1);
+});
+
+test("parseVehiclePositions defaults direction id to null when absent", () => {
+  const decoded = decodedWith([
+    { vehicle: { trip: { routeId: "59" }, position: { latitude: 44.84, longitude: -0.57 } } },
+  ]);
+  assert.equal(parseVehiclePositions(decoded, "59")[0].directionId, null);
+});
+
+test("summarizeByDirection counts vehicles per direction and orders directions ascending", () => {
+  const summaries = summarizeByDirection([
+    { directionId: 1, label: "Floirac" },
+    { directionId: 0, label: "Gare de Bruges" },
+    { directionId: 0, label: "Gare de Bruges" },
+  ]);
+  assert.deepEqual(summaries, [
+    { directionId: 0, count: 2, label: "Gare de Bruges" },
+    { directionId: 1, count: 1, label: "Floirac" },
+  ]);
+});
+
+test("summarizeByDirection picks the most common label per direction and sorts unknown direction last", () => {
+  const summaries = summarizeByDirection([
+    { directionId: null, label: "" },
+    { directionId: 1, label: "Galin" },
+    { directionId: 1, label: "La Vache" },
+    { directionId: 1, label: "Galin" },
+  ]);
+  assert.deepEqual(summaries, [
+    { directionId: 1, count: 3, label: "Galin" },
+    { directionId: null, count: 1, label: null },
+  ]);
+});
+
+test("summarizeByDirection handles an empty vehicle list", () => {
+  assert.deepEqual(summarizeByDirection([]), []);
 });

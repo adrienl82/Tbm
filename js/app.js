@@ -1,7 +1,7 @@
 import { TbmClient, stopNumericId } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes, lineNumericId } from "./lineShapes.js";
-import { fetchActiveRouteIds, fetchVehiclePositions } from "./vehiclePositions.js";
+import { fetchActiveRouteIds, fetchVehiclePositions, summarizeByDirection } from "./vehiclePositions.js";
 import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 import {
   distanceToStopAhead,
@@ -455,6 +455,33 @@ function updateLineIncidentStatus(stalledCount) {
   el.hidden = false;
 }
 
+// Small per-line, per-direction recap shown below the map: how many
+// vehicles are currently in circulation, split by direction (see
+// summarizeByDirection) so "3 en direction de X, 2 en direction de Y" reads
+// at a glance instead of just a single total.
+function updateVehicleStats(vehicles, passage) {
+  const el = document.getElementById("vehicle-stats");
+  if (vehicles.length === 0) {
+    el.hidden = true;
+    return;
+  }
+  const vehicleWord = (count) => {
+    const noun = passage.mode === "tram" ? "tram" : "bus";
+    return count > 1 ? `${count} ${noun}s` : `${count} ${noun}`;
+  };
+  const directions = summarizeByDirection(vehicles);
+  if (directions.length <= 1) {
+    const label = directions[0]?.label;
+    el.textContent = `${vehicleWord(vehicles.length)} en circulation${label ? ` vers ${label}` : ""}`;
+  } else {
+    const parts = directions.map((direction) =>
+      direction.label ? `${vehicleWord(direction.count)} vers ${direction.label}` : vehicleWord(direction.count),
+    );
+    el.textContent = `${vehicleWord(vehicles.length)} en circulation : ${parts.join(" - ")}`;
+  }
+  el.hidden = false;
+}
+
 async function refreshVehicles(passage) {
   if (!passage || !vehicleLayer) return;
   const letter = passage.mode === "tram" ? "T" : "B";
@@ -554,6 +581,7 @@ async function refreshVehicles(passage) {
     }
 
     activeVehicles = nextActiveVehicles;
+    updateVehicleStats(nextActiveVehicles.map((entry) => entry.vehicle), passage);
     updateLineIncidentStatus(nextActiveVehicles.filter((entry) => entry.isStalled).length);
   } catch (err) {
     console.error("Impossible de charger les positions des vehicules :", err);
@@ -636,6 +664,7 @@ async function openLineMap(passage) {
   const statusEl = document.getElementById("map-status");
   statusEl.textContent = "";
   document.getElementById("line-incident").hidden = true;
+  document.getElementById("vehicle-stats").hidden = true;
   // The line list opens the map straight from search; a passage badge opens
   // it from the board. "Retour" should go back to whichever that was.
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";

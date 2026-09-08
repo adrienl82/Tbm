@@ -29,6 +29,7 @@ message FeedEntity {
 message TripDescriptor {
   optional string trip_id = 1;
   optional string route_id = 5;
+  optional uint32 direction_id = 6;
 }
 
 message VehicleDescriptor {
@@ -95,6 +96,7 @@ export function parseVehiclePositions(decoded, routeId) {
       bearing: typeof position.bearing === "number" ? position.bearing : null,
       speedKmh: typeof position.speed === "number" ? Math.round(position.speed * 3.6) : null,
       stopId: vehicle.stopId || null,
+      directionId: typeof vehicle.trip?.directionId === "number" ? vehicle.trip.directionId : null,
       moving: vehicle.currentStatus !== STOPPED_AT,
       // GTFS-RT timestamps are Unix seconds.
       timestamp: typeof vehicle.timestamp === "number" && vehicle.timestamp > 0 ? new Date(vehicle.timestamp * 1000) : null,
@@ -120,6 +122,43 @@ export function activeRouteIds(decoded) {
     if (routeId !== undefined && routeId !== null && routeId !== "") ids.add(String(routeId));
   }
   return ids;
+}
+
+// Groups already-parsed vehicles (see parseVehiclePositions) by their GTFS-RT
+// direction_id (0/1 for a line's two directions) so a caller can show a
+// per-direction vehicle count. Each group's label is its most common
+// non-empty vehicle.label (the vehicle's destination headsign) -- a line can
+// have several distinct headsigns per direction (branches, short turns), so
+// this only picks the one seen on the most vehicles, not a canonical name.
+// Groups are sorted by directionId ascending, with vehicles missing a
+// direction_id (older feeds, edge cases) grouped last under null.
+export function summarizeByDirection(vehicles) {
+  const groups = new Map();
+  for (const vehicle of vehicles) {
+    const key = vehicle.directionId;
+    if (!groups.has(key)) groups.set(key, { directionId: key, count: 0, labelCounts: new Map() });
+    const group = groups.get(key);
+    group.count += 1;
+    if (vehicle.label) group.labelCounts.set(vehicle.label, (group.labelCounts.get(vehicle.label) ?? 0) + 1);
+  }
+  const summaries = [...groups.values()].map((group) => {
+    let label = null;
+    let best = 0;
+    for (const [candidate, occurrences] of group.labelCounts) {
+      if (occurrences > best) {
+        best = occurrences;
+        label = candidate;
+      }
+    }
+    return { directionId: group.directionId, count: group.count, label };
+  });
+  summaries.sort((a, b) => {
+    if (a.directionId === b.directionId) return 0;
+    if (a.directionId === null) return 1;
+    if (b.directionId === null) return -1;
+    return a.directionId - b.directionId;
+  });
+  return summaries;
 }
 
 async function fetchDecodedFeed({ fetchImpl = null, protobufImpl = null } = {}) {

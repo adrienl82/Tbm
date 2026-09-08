@@ -239,6 +239,14 @@ ul {
   text-align: center;
 }
 
+/* Small recap of vehicles currently in circulation on the open line, shown
+   right below the map -- a plain .status is muted/centered, which reads as
+   informational rather than a warning (contrast with .status.incident). */
+.status.stats {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
 /* Shown below the map when several vehicles on the line have been stalled
    for a while -- a plain .status (muted/centered) doesn't stand out enough
    for something worth the user's attention. */
