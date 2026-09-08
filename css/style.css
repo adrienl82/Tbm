@@ -369,13 +369,24 @@ ul {
 .vehicle-arrow {
   position: absolute;
   left: 50%;
-  top: -6px;
+  top: -11px;
   transform: translateX(-50%);
   width: 0;
   height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-bottom: 7px solid; /* color set inline (see vehicleDivIcon) */
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  /* Tall enough that its flat base sits well inside the circle rather than
+     right at its edge -- .vehicle-badge (a same-sized circle painted after
+     this in the html, so it stacks on top) then covers that base, leaving
+     only a tip poking out whose visible edge follows the circle's own
+     curve instead of a straight cut. */
+  border-bottom: 20px solid; /* color set inline (see vehicleDivIcon) */
+  /* A thin white outline (same idea as the badge's own white border) so the
+     tip reads clearly against a route line or another vehicle behind it --
+     drop-shadow traces the triangle's actual silhouette rather than its
+     (much bigger, mostly transparent) bounding box, which a plain
+     box-shadow would use instead. */
+  filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff);
 }
 
 .vehicle-marker.is-stopped .vehicle-arrow {

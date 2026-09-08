@@ -822,7 +822,9 @@ async function openLineMap(passage) {
         L.polyline(shape.latLngs, {
           color,
           weight: 4,
-          opacity: shape.direction === "retour" ? 0.55 : 0.9,
+          // Faded enough that a same-colored vehicle marker sitting on the
+          // route still stands out against it.
+          opacity: shape.direction === "retour" ? 0.3 : 0.5,
         }).addTo(lineMapLayer);
       }
       routeBounds = shapePoints;
