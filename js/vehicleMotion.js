@@ -223,6 +223,19 @@ export function lerpLatLng(from, to, t) {
   return [from[0] + (to[0] - from[0]) * clamped, from[1] + (to[1] - from[1]) * clamped];
 }
 
+// GTFS-RT's own current_status enum (see vehiclePositions.js's `moving`)
+// reflects trip progress -- INCOMING_AT/IN_TRANSIT_TO vs STOPPED_AT -- not
+// real physical motion: a bus stuck in traffic, waiting at a light, or
+// actually broken down can keep reporting IN_TRANSIT_TO with a reported
+// speed of 0 for as long as it likes, which trackStalledSince's plain
+// `moving` flag would then never flag as stalled. This instead also treats
+// a confirmed zero speed as not moving regardless of that status. A
+// missing speed reading (null) isn't treated as proof of a stop, though,
+// since plenty of otherwise-normal fixes just omit it.
+export function isActuallyMoving(vehicle) {
+  return vehicle.moving && vehicle.speedKmh !== 0;
+}
+
 // Tracks how long a vehicle has been continuously stopped across refreshes.
 // A single fix's own timestamp only says when it was last observed, not how
 // long it's actually been sitting there, so this instead carries the

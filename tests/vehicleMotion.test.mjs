@@ -6,6 +6,7 @@ import {
   destinationPoint,
   distanceToStopAhead,
   estimateVehiclePosition,
+  isActuallyMoving,
   isStalled,
   lerpLatLng,
   pointAtDistanceAlong,
@@ -245,6 +246,23 @@ test("lerpLatLng blends proportionally in between", () => {
 test("lerpLatLng clamps t outside [0, 1]", () => {
   assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], -1), [44.8, -0.6]);
   assert.deepEqual(lerpLatLng([44.8, -0.6], [44.9, -0.5], 5), [44.9, -0.5]);
+});
+
+test("isActuallyMoving trusts a moving vehicle with an unknown or positive speed", () => {
+  assert.equal(isActuallyMoving({ moving: true, speedKmh: null }), true);
+  assert.equal(isActuallyMoving({ moving: true, speedKmh: 18 }), true);
+});
+
+test("isActuallyMoving overrides GTFS's own moving status when speed is confirmed zero", () => {
+  // A vehicle can keep reporting IN_TRANSIT_TO (GTFS-RT's own "moving"
+  // status) with speed 0 for as long as it's stuck in traffic or actually
+  // broken down -- real bus 1064 on line 8 was seen doing exactly this.
+  assert.equal(isActuallyMoving({ moving: true, speedKmh: 0 }), false);
+});
+
+test("isActuallyMoving is false when GTFS reports the vehicle stopped, regardless of speed", () => {
+  assert.equal(isActuallyMoving({ moving: false, speedKmh: 0 }), false);
+  assert.equal(isActuallyMoving({ moving: false, speedKmh: null }), false);
 });
 
 test("trackStalledSince returns null while the vehicle is moving", () => {

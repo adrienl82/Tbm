@@ -12,6 +12,7 @@ import {
   bearingBetween,
   distanceToStopAhead,
   estimateVehiclePosition,
+  isActuallyMoving,
   isStalled,
   lerpLatLng,
   trackStalledSince,
@@ -587,7 +588,7 @@ function syncVehicleMarkers(vehicles) {
     // forward across refreshes (matched by id) rather than reset every
     // time -- a single fix's timestamp only says when it was last
     // observed, not how long it's actually been sitting there.
-    const stalledSince = trackStalledSince(vehicle.moving, previous?.stalledSince ?? null, Date.now());
+    const stalledSince = trackStalledSince(isActuallyMoving(vehicle), previous?.stalledSince ?? null, Date.now());
     const vehicleIsStalled = isStalled(stalledSince, Date.now(), STALLED_THRESHOLD_MS);
 
     const { letter, color, fallbackLabel } = vehicleStyle(vehicle);
