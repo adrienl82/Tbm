@@ -14,13 +14,15 @@
 // Options:
 //   --interval <sec>  seconds between polls (default 20; feed refreshes ~10-30s)
 //   --out <dir>       output root (default ./data)
-//   --raw             also keep every raw protobuf response, gzipped
-//   --alerts          also record the disruptions feed (general messages)
+//   --trips           also record the trip-updates feed (per-trip delays)
+//   --alerts          also record the service-alerts feed (disruptions)
+//   --raw             also keep every raw vehicles protobuf response, gzipped
 //   --once            poll a single time, print a summary, exit (smoke test)
 //
 // Output layout (rotates automatically at midnight, local time):
-//   data/2026-09-09/vehicles-2026-09-09.ndjson
-//   data/2026-09-09/alerts-2026-09-09.ndjson        (--alerts)
+//   data/2026-09-09/vehicles-2026-09-09.ndjson     one row per new vehicle fix
+//   data/2026-09-09/trips-2026-09-09.ndjson         one row per trip when its delay moves (--trips)
+//   data/2026-09-09/alerts-2026-09-09.ndjson        one row per alert when it appears/changes (--alerts)
 //   data/2026-09-09/raw/153201.pb.gz                (--raw)
 //   data/2026-09-09/meta.json                       (run info + counters)
 //
@@ -48,16 +50,24 @@ try {
 
 const ALERTS_FEED_URL =
   "https://bdx.mecatran.com/utw/ws/gtfsfeed/alerts/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt";
+const TRIPS_FEED_URL =
+  "https://bdx.mecatran.com/utw/ws/gtfsfeed/realtime/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt";
+
+// A trip-update row is re-emitted only when the trip's delay moves by at
+// least this many seconds since the last one written for it (same
+// change-only principle as the vehicle-fix dedup below).
+const TRIP_DELAY_EPSILON_SEC = 30;
 
 // --- CLI args -------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { interval: 20, out: "data", raw: false, alerts: false, once: false };
+  const opts = { interval: 20, out: "data", raw: false, trips: false, alerts: false, once: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--interval") opts.interval = Number(argv[++i]);
     else if (arg === "--out") opts.out = argv[++i];
     else if (arg === "--raw") opts.raw = true;
+    else if (arg === "--trips") opts.trips = true;
     else if (arg === "--alerts") opts.alerts = true;
     else if (arg === "--once") opts.once = true;
     else if (arg === "--help" || arg === "-h") {
@@ -90,6 +100,7 @@ const writers = {
   date: null,
   dir: null,
   vehicles: null,
+  trips: null,
   alerts: null,
 };
 
@@ -102,6 +113,9 @@ function rotateTo(date) {
   writers.date = date;
   writers.dir = dir;
   writers.vehicles = fs.createWriteStream(path.join(dir, `vehicles-${date}.ndjson`), { flags: "a" });
+  if (opts.trips) {
+    writers.trips = fs.createWriteStream(path.join(dir, `trips-${date}.ndjson`), { flags: "a" });
+  }
   if (opts.alerts) {
     writers.alerts = fs.createWriteStream(path.join(dir, `alerts-${date}.ndjson`), { flags: "a" });
   }
@@ -110,8 +124,10 @@ function rotateTo(date) {
 
 function closeWriters() {
   writers.vehicles?.end();
+  writers.trips?.end();
   writers.alerts?.end();
   writers.vehicles = null;
+  writers.trips = null;
   writers.alerts = null;
 }
 
@@ -120,13 +136,17 @@ function closeWriters() {
 // Bounded memory (~one entry per active vehicle), unlike keeping every
 // (id, ts) pair seen all day. Vehicles with no timestamp are always emitted.
 const lastFixTs = new Map();
+// trip_id -> last delay (s) written; alert_id -> hash of last state written.
+const lastTripDelay = new Map();
+const lastAlertHash = new Map();
 
 const counters = {
   startedAt: new Date().toISOString(),
   polls: 0,
   errors: 0,
   vehicleRowsWritten: 0,
-  alertPollsWritten: 0,
+  tripRowsWritten: 0,
+  alertRowsWritten: 0,
   lastPollAt: null,
   lastVehicleCount: 0,
 };
@@ -138,6 +158,7 @@ function writeMeta() {
     feedUrl: FEED_URL,
     intervalSec: opts.interval,
     raw: opts.raw,
+    trips: opts.trips,
     alerts: opts.alerts,
     updatedAt: new Date().toISOString(),
   };
@@ -192,6 +213,93 @@ function vehicleRows(decoded, recordedAt) {
   return rows;
 }
 
+// One row per trip whose delay has moved by >= TRIP_DELAY_EPSILON_SEC since
+// the last row written for it (or that we've never seen). `next` is the first
+// stop_time_update still in the future -- the trip's imminent prediction.
+function tripRows(decoded, recordedAt) {
+  const nowSec = Date.parse(recordedAt) / 1000;
+  const rows = [];
+  for (const entity of decoded?.entity ?? []) {
+    const tu = entity.trip_update ?? entity.tripUpdate;
+    const tripId = tu?.trip?.tripId;
+    if (!tu || !tripId) continue;
+
+    const delay = typeof tu.delay === "number" ? tu.delay : null;
+    if (delay !== null) {
+      const last = lastTripDelay.get(tripId);
+      if (last !== undefined && Math.abs(delay - last) < TRIP_DELAY_EPSILON_SEC) continue;
+      lastTripDelay.set(tripId, delay);
+    } else if (lastTripDelay.has(tripId)) {
+      continue; // no delay now, already have a row for this trip
+    } else {
+      lastTripDelay.set(tripId, 0);
+    }
+
+    const stus = tu.stopTimeUpdate ?? tu.stop_time_update ?? [];
+    const next =
+      stus.find((s) => (s.arrival?.time ?? s.departure?.time ?? 0) >= nowSec) ?? stus[stus.length - 1] ?? null;
+    const nextTime = next ? (next.arrival?.time ?? next.departure?.time ?? null) : null;
+
+    rows.push({
+      rt: recordedAt,
+      trip: tripId,
+      route: tu.trip.routeId != null ? String(tu.trip.routeId) : null,
+      dir: typeof tu.trip.directionId === "number" ? tu.trip.directionId : null,
+      start_date: tu.trip.startDate ?? null,
+      delay_sec: delay,
+      next_stop: next?.stopId || null,
+      next_stop_seq: typeof next?.stopSequence === "number" ? next.stopSequence : null,
+      next_time: nextTime ? new Date(nextTime * 1000).toISOString() : null,
+      sched_rel: typeof tu.trip.scheduleRelationship === "number" ? tu.trip.scheduleRelationship : null,
+    });
+  }
+  return rows;
+}
+
+function firstText(translated) {
+  const t = translated?.translation ?? [];
+  return (t.find((x) => x.language === "fr") ?? t[0])?.text ?? null;
+}
+
+// One row per alert on first sighting and whenever its content changes.
+function alertRows(decoded, recordedAt) {
+  const rows = [];
+  for (const entity of decoded?.entity ?? []) {
+    const a = entity.alert;
+    if (!a) continue;
+    const id = entity.id || "";
+
+    const row = {
+      rt: recordedAt,
+      alert_id: id,
+      cause: typeof a.cause === "number" ? a.cause : null,
+      effect: typeof a.effect === "number" ? a.effect : null,
+      header: firstText(a.headerText),
+      description: firstText(a.descriptionText),
+      active: (a.activePeriod ?? []).map((p) => ({
+        start: p.start ? new Date(p.start * 1000).toISOString() : null,
+        end: p.end ? new Date(p.end * 1000).toISOString() : null,
+      })),
+      informed: (a.informedEntity ?? []).map((e) => ({
+        route: e.routeId || null,
+        stop: e.stopId || null,
+        dir: typeof e.directionId === "number" ? e.directionId : null,
+        trip: e.trip?.tripId || null,
+      })),
+    };
+
+    const hash = JSON.stringify([row.cause, row.effect, row.header, row.description, row.active, row.informed]);
+    if (lastAlertHash.get(id) === hash) continue;
+    lastAlertHash.set(id, hash);
+    rows.push(row);
+  }
+  return rows;
+}
+
+async function fetchDecoded(url) {
+  return decodeFeedMessage(await fetchBytes(url), protobuf);
+}
+
 async function pollOnce() {
   const now = new Date();
   rotateTo(localDateString(now));
@@ -214,18 +322,29 @@ async function pollOnce() {
   counters.lastVehicleCount = (decoded?.entity ?? []).length;
   counters.vehicleRowsWritten += rows.length;
 
+  let tripCount = 0;
+  if (opts.trips) {
+    try {
+      const trips = tripRows(await fetchDecoded(TRIPS_FEED_URL), recordedAt);
+      tripCount = trips.length;
+      if (trips.length > 0) writers.trips.write(trips.map((r) => JSON.stringify(r)).join("\n") + "\n");
+      counters.tripRowsWritten += trips.length;
+    } catch (err) {
+      console.error(`[${recordedAt}] trips: ${err.message}`);
+    }
+  }
+
   if (opts.alerts) {
     try {
-      const alertBytes = await fetchBytes(ALERTS_FEED_URL);
-      const alertDecoded = decodeFeedMessage(alertBytes, protobuf);
-      writers.alerts.write(JSON.stringify({ rt: recordedAt, feed: alertDecoded }) + "\n");
-      counters.alertPollsWritten += 1;
+      const alerts = alertRows(await fetchDecoded(ALERTS_FEED_URL), recordedAt);
+      if (alerts.length > 0) writers.alerts.write(alerts.map((r) => JSON.stringify(r)).join("\n") + "\n");
+      counters.alertRowsWritten += alerts.length;
     } catch (err) {
       console.error(`[${recordedAt}] alerts: ${err.message}`);
     }
   }
 
-  return { vehicles: counters.lastVehicleCount, newRows: rows.length };
+  return { vehicles: counters.lastVehicleCount, newRows: rows.length, tripRows: tripCount };
 }
 
 // --- run loop --------------------------------------------------------
@@ -236,11 +355,15 @@ async function loop() {
   while (!stopping) {
     const tick = Date.now();
     try {
-      const { vehicles, newRows } = await pollOnce();
+      const { vehicles, newRows, tripRows: tRows } = await pollOnce();
       if (counters.polls % 10 === 0 || counters.polls === 1) {
         console.error(
-          `[${counters.lastPollAt}] poll #${counters.polls} : ${vehicles} vehicules, +${newRows} lignes ` +
-            `(total ${counters.vehicleRowsWritten}, ${counters.errors} erreurs)`,
+          `[${counters.lastPollAt}] poll #${counters.polls} : ${vehicles} vehicules, +${newRows} lignes` +
+            (opts.trips ? `, +${tRows} trips` : "") +
+            ` (total ${counters.vehicleRowsWritten} veh` +
+            (opts.trips ? `, ${counters.tripRowsWritten} trips` : "") +
+            (opts.alerts ? `, ${counters.alertRowsWritten} alerts` : "") +
+            `, ${counters.errors} erreurs)`,
         );
       }
       if (counters.polls % 30 === 0) writeMeta();
@@ -281,7 +404,12 @@ if (opts.once) {
     .then((r) => {
       writeMeta();
       closeWriters();
-      console.error(`OK : ${r.vehicles} vehicules dans le flux, ${r.newRows} lignes ecrites dans ${writers.dir}/`);
+      console.error(
+        `OK : ${r.vehicles} vehicules dans le flux, ${r.newRows} lignes` +
+          (opts.trips ? `, ${r.tripRows} trips` : "") +
+          (opts.alerts ? `, ${counters.alertRowsWritten} alerts` : "") +
+          ` ecrites dans ${writers.dir}/`,
+      );
       setTimeout(() => process.exit(0), 200);
     })
     .catch((err) => {

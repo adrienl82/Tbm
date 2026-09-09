@@ -18,8 +18,9 @@ Options :
 |---|---|---|
 | `--interval <sec>` | `20` | délai entre deux relevés |
 | `--out <dir>` | `data` | dossier racine de sortie |
-| `--raw` | off | garde aussi chaque réponse protobuf brute, gzippée (`raw/HHMMSS.pb.gz`) |
-| `--alerts` | off | enregistre en plus le flux perturbations |
+| `--trips` | off | enregistre en plus le flux trip-updates (retard par course) |
+| `--alerts` | off | enregistre en plus le flux perturbations (alertes) |
+| `--raw` | off | garde aussi chaque réponse véhicules brute, gzippée (`raw/HHMMSS.pb.gz`) |
 | `--once` | off | un seul relevé puis sortie (test rapide) |
 
 Sortie (rotation automatique à minuit, heure locale) :
@@ -27,7 +28,8 @@ Sortie (rotation automatique à minuit, heure locale) :
 ```
 data/2026-09-09/
   vehicles-2026-09-09.ndjson    une ligne par point GPS (voir champs plus bas)
-  alerts-2026-09-09.ndjson      --alerts
+  trips-2026-09-09.ndjson       une ligne par course quand son retard bouge (--trips)
+  alerts-2026-09-09.ndjson      une ligne par alerte à son apparition / changement (--alerts)
   raw/153201.pb.gz              --raw
   meta.json                     infos de run + compteurs
 ```
@@ -70,6 +72,39 @@ data/2026-09-09/
 Déduplication : une ligne n'est écrite que si le `ft` du véhicule est plus
 récent que le dernier enregistré pour cet `id` — pas de doublon quand un
 véhicule ne bouge pas entre deux relevés.
+
+### Champs d'une ligne `trips-*.ndjson` (`--trips`)
+
+Flux GTFS-RT trip-updates : la prédiction temps réel de chaque course en
+service. Une ligne est écrite à la 1ʳᵉ observation d'une course, puis à chaque
+fois que son retard (`delay_sec`) bouge d'au moins 30 s.
+
+| clé | sens |
+|---|---|
+| `rt` | horodatage du relevé (ISO 8601 UTC) |
+| `trip` | id de course GTFS (joint à `trips.txt` / `stop_times.txt` du GTFS statique) |
+| `route` | id numérique de ligne |
+| `dir` | sens `0` / `1` (`null` si absent) |
+| `start_date` | date de service de la course (`YYYYMMDD`) |
+| `delay_sec` | retard courant de la course en secondes (négatif = en avance) |
+| `next_stop` | id du prochain arrêt (celui dont l'heure prévue est encore à venir) |
+| `next_stop_seq` | rang de ce prochain arrêt dans la course |
+| `next_time` | heure d'arrivée prévue à ce prochain arrêt (ISO 8601 UTC) |
+| `sched_rel` | relation à l'horaire : `0` prévu, `1` supprimé, `2` ajouté, `3` course annulée |
+
+### Champs d'une ligne `alerts-*.ndjson` (`--alerts`)
+
+Flux GTFS-RT service-alerts. Une ligne à l'apparition de l'alerte, puis à
+chaque changement de son contenu.
+
+| clé | sens |
+|---|---|
+| `rt` | horodatage du relevé |
+| `alert_id` | identifiant de l'alerte |
+| `cause`, `effect` | codes GTFS-RT (`Alert.Cause` / `Alert.Effect`) |
+| `header`, `description` | textes (traduction `fr`) |
+| `active` | périodes d'activité `[{start, end}]` (ISO 8601 UTC, bornes `null` possibles) |
+| `informed` | entités concernées `[{route, stop, dir, trip}]` |
 
 ## Analyser après coup
 
@@ -117,6 +152,13 @@ one = df[df.id == "ineo-bus:1064"].sort_values("ft")
 # transport.data.gouv.fr et joindre sur trip / stop pour l'écart à l'horaire.
 ```
 
-Le flux `trips` (retards théoriques GTFS-RT) n'est **pas** exposé
-publiquement par TBM ; l'écart à l'horaire se reconstruit en croisant ces
-positions avec le GTFS statique (`stop_times.txt`).
+Sources de référence pour l'analyse :
+
+- **GTFS statique** : `https://bdx.mecatran.com/utw/ws/gtfsfeed/static/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt`
+  (`bordeaux.gtfs.zip` : `stops`, `routes`, `trips`, `stop_times`, `shapes`,
+  `calendar` / `calendar_dates`).
+- **Trip-updates GTFS-RT** : `.../gtfsfeed/realtime/bordeaux?apiKey=...` —
+  capturé par `--trips`, donne le retard observé sans avoir à le reconstruire.
+- **Jours fériés** : `https://calendrier.api.gouv.fr/jours-feries/metropole/<annee>.json`
+- **Vacances scolaires** (Bordeaux = Zone A) :
+  `https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/fr-en-calendrier-scolaire/records?where=location%3D%22Bordeaux%22`

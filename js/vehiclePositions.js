@@ -6,7 +6,11 @@
 // TBM roughly every 10-30 seconds.
 //
 // GTFS_REALTIME_PROTO is a trimmed copy of the public, stable
-// gtfs-realtime.proto schema -- only the fields this app reads.
+// gtfs-realtime.proto schema. The browser app only reads VehiclePosition;
+// the extra TripUpdate and Alert messages are here for the offline recorder
+// (tools/record-feed.mjs --trips / --alerts), which archives those feeds
+// too. Enum-typed fields (schedule_relationship, cause, effect) are declared
+// as plain uint32 to keep the schema short -- callers map the codes.
 
 import { isValidCoordinate } from "./geoBounds.js";
 import { lineNumericId } from "./lineShapes.js";
@@ -14,7 +18,7 @@ import { lineNumericId } from "./lineShapes.js";
 export const FEED_URL =
   "https://bdx.mecatran.com/utw/ws/gtfsfeed/vehicles/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt";
 
-const GTFS_REALTIME_PROTO = `
+export const GTFS_REALTIME_PROTO = `
 syntax = "proto2";
 package transit_realtime;
 
@@ -23,11 +27,17 @@ message FeedMessage {
 }
 
 message FeedEntity {
+  optional string id = 1;
+  optional TripUpdate trip_update = 3;
   optional VehiclePosition vehicle = 4;
+  optional Alert alert = 5;
 }
 
 message TripDescriptor {
   optional string trip_id = 1;
+  optional string start_time = 2;
+  optional string start_date = 3;
+  optional uint32 schedule_relationship = 4;
   optional string route_id = 5;
   optional uint32 direction_id = 6;
 }
@@ -57,6 +67,59 @@ message VehiclePosition {
   optional VehicleStopStatus current_status = 4 [default = IN_TRANSIT_TO];
   optional string stop_id = 7;
   optional uint64 timestamp = 5;
+}
+
+message TripUpdate {
+  optional TripDescriptor trip = 1;
+  optional VehicleDescriptor vehicle = 3;
+  repeated StopTimeUpdate stop_time_update = 2;
+  optional uint64 timestamp = 4;
+  optional int32 delay = 5;
+
+  message StopTimeEvent {
+    optional int32 delay = 1;
+    optional int64 time = 2;
+    optional int32 uncertainty = 3;
+  }
+
+  message StopTimeUpdate {
+    optional uint32 stop_sequence = 1;
+    optional string stop_id = 4;
+    optional StopTimeEvent arrival = 2;
+    optional StopTimeEvent departure = 3;
+    optional uint32 schedule_relationship = 5;
+  }
+}
+
+message TimeRange {
+  optional uint64 start = 1;
+  optional uint64 end = 2;
+}
+
+message EntitySelector {
+  optional string agency_id = 1;
+  optional string route_id = 2;
+  optional int32 route_type = 3;
+  optional string stop_id = 4;
+  optional TripDescriptor trip = 5;
+  optional uint32 direction_id = 6;
+}
+
+message TranslatedString {
+  message Translation {
+    required string text = 1;
+    optional string language = 2;
+  }
+  repeated Translation translation = 1;
+}
+
+message Alert {
+  repeated TimeRange active_period = 1;
+  repeated EntitySelector informed_entity = 5;
+  optional uint32 cause = 6;
+  optional uint32 effect = 7;
+  optional TranslatedString header_text = 10;
+  optional TranslatedString description_text = 11;
 }
 `;
 

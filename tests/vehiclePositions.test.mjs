@@ -3,12 +3,16 @@ import { test } from "node:test";
 import protobuf from "protobufjs";
 
 import {
+  GTFS_REALTIME_PROTO,
   activeRouteIds,
   decodeFeedMessage,
   parseVehiclePositions,
   parseVehiclePositionsForRoutes,
   summarizeByDirection,
 } from "../js/vehiclePositions.js";
+
+const FeedMessage = protobuf.parse(GTFS_REALTIME_PROTO).root.lookupType("transit_realtime.FeedMessage");
+const encodeFeed = (obj) => new Uint8Array(FeedMessage.encode(obj).finish());
 
 function decodedWith(entities) {
   return { entity: entities };
@@ -236,28 +240,10 @@ test("parseVehiclePositionsForRoutes handles an empty or missing entity list", (
 
 // decodeFeedMessage is the shared entry point for raw GTFS-RT bytes -- the
 // browser feeds it the CDN `protobuf` global, tools/record-feed.mjs feeds it
-// the npm package. Encode a message with the same schema, round-trip it, and
+// the npm package. Encode with the real embedded schema, round-trip it, and
 // check the parse functions accept the result unchanged.
-test("decodeFeedMessage turns raw GTFS-RT bytes into the object the parse functions expect", () => {
-  const proto = protobuf.parse(`
-    syntax = "proto2";
-    package transit_realtime;
-    message FeedMessage { repeated FeedEntity entity = 2; }
-    message FeedEntity { optional VehiclePosition vehicle = 4; }
-    message TripDescriptor { optional string trip_id = 1; optional string route_id = 5; optional uint32 direction_id = 6; }
-    message VehicleDescriptor { optional string id = 1; optional string label = 2; }
-    message Position { required float latitude = 1; required float longitude = 2; optional float speed = 5; }
-    message VehiclePosition {
-      optional TripDescriptor trip = 1;
-      optional VehicleDescriptor vehicle = 8;
-      optional Position position = 2;
-      optional uint32 current_status = 4;
-      optional string stop_id = 7;
-      optional uint64 timestamp = 5;
-    }
-  `).root.lookupType("transit_realtime.FeedMessage");
-
-  const bytes = proto.encode({
+test("decodeFeedMessage turns raw GTFS-RT vehicle bytes into the object the parse functions expect", () => {
+  const bytes = encodeFeed({
     entity: [
       {
         vehicle: {
@@ -270,13 +256,77 @@ test("decodeFeedMessage turns raw GTFS-RT bytes into the object the parse functi
         },
       },
     ],
-  }).finish();
+  });
 
-  const decoded = decodeFeedMessage(new Uint8Array(bytes), protobuf);
+  const decoded = decodeFeedMessage(bytes, protobuf);
   const [vehicle] = parseVehiclePositions(decoded, "59");
   assert.equal(vehicle.id, "bus-1");
   assert.equal(vehicle.routeId, "59");
   assert.equal(vehicle.speedKmh, 29); // 8 m/s -> 28.8 -> rounded
   assert.equal(vehicle.moving, false); // STOPPED_AT
   assert.deepEqual(vehicle.timestamp, new Date(1_700_000_000 * 1000));
+});
+
+// The embedded schema also carries TripUpdate and Alert (unused by the app,
+// read by the recorder's --trips / --alerts). Regression guard: a past
+// version only defined VehiclePosition, so entity.trip_update / entity.alert
+// decoded to nothing and the recorder archived empty rows.
+test("decodeFeedMessage decodes a TripUpdate entity's trip, delay and stop_time_update", () => {
+  const decoded = decodeFeedMessage(
+    encodeFeed({
+      entity: [
+        {
+          id: "RT|trip-1",
+          tripUpdate: {
+            trip: { tripId: "trip-1", routeId: "12", directionId: 0, startDate: "20260909" },
+            delay: 95,
+            timestamp: 1_700_000_500,
+            stopTimeUpdate: [
+              { stopSequence: 4, stopId: "5001", arrival: { delay: 95, time: 1_700_000_600 }, scheduleRelationship: 0 },
+            ],
+          },
+        },
+      ],
+    }),
+    protobuf,
+  );
+
+  const tu = decoded.entity[0].tripUpdate;
+  assert.equal(tu.trip.tripId, "trip-1");
+  assert.equal(tu.trip.startDate, "20260909");
+  assert.equal(tu.delay, 95);
+  assert.equal(tu.stopTimeUpdate.length, 1);
+  assert.equal(tu.stopTimeUpdate[0].stopId, "5001");
+  assert.equal(tu.stopTimeUpdate[0].arrival.time, 1_700_000_600);
+});
+
+test("decodeFeedMessage decodes an Alert entity's texts, period and informed entities", () => {
+  const decoded = decodeFeedMessage(
+    encodeFeed({
+      entity: [
+        {
+          id: "RTA:42",
+          alert: {
+            cause: 2,
+            effect: 4,
+            activePeriod: [{ start: 1_700_000_000, end: 1_700_100_000 }],
+            informedEntity: [{ routeId: "A", directionId: 1 }, { stopId: "9999" }],
+            headerText: { translation: [{ text: "Travaux ligne A", language: "fr" }] },
+            descriptionText: { translation: [{ text: "Circulation interrompue", language: "fr" }] },
+          },
+        },
+      ],
+    }),
+    protobuf,
+  );
+
+  const a = decoded.entity[0].alert;
+  assert.equal(decoded.entity[0].id, "RTA:42");
+  assert.equal(a.cause, 2);
+  assert.equal(a.effect, 4);
+  assert.equal(a.activePeriod[0].start, 1_700_000_000);
+  assert.equal(a.informedEntity[0].routeId, "A");
+  assert.equal(a.informedEntity[1].stopId, "9999");
+  assert.equal(a.headerText.translation[0].text, "Travaux ligne A");
+  assert.equal(a.descriptionText.translation[0].text, "Circulation interrompue");
 });

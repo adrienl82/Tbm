@@ -28,6 +28,8 @@ automatique (watchdog) et logs dans l'interface HA. L'archive est écrite dans
    | option | défaut | rôle |
    |---|---|---|
    | `interval` | `20` | secondes entre deux relevés du flux |
+   | `trips` | `true` | enregistrer aussi le flux trip-updates (retard par course) |
+   | `alerts` | `true` | enregistrer aussi le flux perturbations |
    | `keep_days` | `14` | jours d'archive gardés (`0` = ne jamais purger) |
    | `git_ref` | `claude/mobile-app-rss-tbm-kaob9e` | branche/tag du repo à utiliser |
 
@@ -35,8 +37,9 @@ automatique (watchdog) et logs dans l'interface HA. L'archive est écrite dans
    **« Watchdog »** (redémarre l'add-on s'il plante), puis **Démarrer**.
 
 6. Onglet **Journal** : vérifier la ligne
-   `Demarrage : record-feed --interval 20 --out /share/tbm` puis, toutes les
-   ~10 relevés, `poll #N : X vehicules, +Y lignes`.
+   `Demarrage : record-feed --interval 20 --trips --alerts --out /share/tbm`
+   puis, toutes les ~10 relevés,
+   `poll #N : X vehicules, +Y lignes, +Z trips`.
 
 ## Comment ça tourne
 

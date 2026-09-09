@@ -7,6 +7,10 @@ INTERVAL="$(bashio::config 'interval')"
 KEEP="$(bashio::config 'keep_days')"
 REF="$(bashio::config 'git_ref')"
 
+FLAGS=""
+if bashio::config.true 'trips'; then FLAGS="${FLAGS} --trips"; fi
+if bashio::config.true 'alerts'; then FLAGS="${FLAGS} --alerts"; fi
+
 mkdir -p "${OUT}"
 
 # --- code du recorder : clone au premier lancement, sinon mise a jour ----
@@ -40,5 +44,5 @@ housekeep
 
 # exec -> node devient le process principal, donc le SIGTERM d'un "stop"
 # add-on lui parvient directement et il s'arrete proprement (flush + meta).
-bashio::log.info "Demarrage : record-feed --interval ${INTERVAL} --out ${OUT}"
-exec node tools/record-feed.mjs --interval "${INTERVAL}" --out "${OUT}"
+bashio::log.info "Demarrage : record-feed --interval ${INTERVAL}${FLAGS} --out ${OUT}"
+exec node tools/record-feed.mjs --interval "${INTERVAL}" ${FLAGS} --out "${OUT}"
