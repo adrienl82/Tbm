@@ -8,6 +8,7 @@ import {
   decodeFeedMessage,
   parseVehiclePositions,
   parseVehiclePositionsForRoutes,
+  countByRoute,
   summarizeByDirection,
 } from "../js/vehiclePositions.js";
 
@@ -202,6 +203,49 @@ test("summarizeByDirection picks the most common label per direction and sorts u
 
 test("summarizeByDirection handles an empty vehicle list", () => {
   assert.deepEqual(summarizeByDirection([]), []);
+});
+
+test("countByRoute counts vehicles per route, busiest first", () => {
+  const counts = countByRoute([
+    { routeId: "A" },
+    { routeId: "B" },
+    { routeId: "A" },
+    { routeId: "A" },
+    { routeId: "B" },
+    { routeId: "C" },
+  ]);
+  assert.deepEqual(counts, [
+    { routeId: "A", count: 3 },
+    { routeId: "B", count: 2 },
+    { routeId: "C", count: 1 },
+  ]);
+});
+
+test("countByRoute breaks count ties by route id, natural order, with null last", () => {
+  const counts = countByRoute([
+    { routeId: "10" },
+    { routeId: "2" },
+    { routeId: null },
+    { routeId: "2" },
+    { routeId: "10" },
+    { routeId: null },
+  ]);
+  assert.deepEqual(counts, [
+    { routeId: "2", count: 2 },
+    { routeId: "10", count: 2 },
+    { routeId: null, count: 2 },
+  ]);
+});
+
+test("countByRoute treats a missing route id as null (still ordered by count)", () => {
+  assert.deepEqual(countByRoute([{}, { routeId: undefined }, { routeId: "5" }]), [
+    { routeId: null, count: 2 },
+    { routeId: "5", count: 1 },
+  ]);
+});
+
+test("countByRoute handles an empty vehicle list", () => {
+  assert.deepEqual(countByRoute([]), []);
 });
 
 test("parseVehiclePositions exposes the route id as a string", () => {

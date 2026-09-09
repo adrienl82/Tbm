@@ -268,6 +268,27 @@ export function summarizeByDirection(vehicles) {
   return summaries;
 }
 
+// Counts already-parsed vehicles by their route id -- the fleet ("every
+// tram"/"every bus") map's per-line recap. Returns [{ routeId, count }]
+// busiest line first, then routeId ascending for a stable tie-break;
+// vehicles with no route id are grouped under routeId null and sorted last.
+export function countByRoute(vehicles) {
+  const counts = new Map();
+  for (const vehicle of vehicles) {
+    const key = vehicle.routeId ?? null;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([routeId, count]) => ({ routeId, count }))
+    .sort((a, b) => {
+      if (a.count !== b.count) return b.count - a.count;
+      if (a.routeId === b.routeId) return 0;
+      if (a.routeId === null) return 1;
+      if (b.routeId === null) return -1;
+      return String(a.routeId).localeCompare(String(b.routeId), "en", { numeric: true });
+    });
+}
+
 async function fetchDecodedFeed({ fetchImpl = null, protobufImpl = null } = {}) {
   const fetcher = fetchImpl ?? (typeof fetch !== "undefined" ? fetch.bind(globalThis) : null);
   const pbLib = protobufImpl ?? (typeof protobuf !== "undefined" ? protobuf : null);

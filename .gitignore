@@ -4,7 +4,8 @@ node_modules/
 
 # Reglages locaux de l'agent (permissions Bash auto-enregistrees, etc.)
 .claude/
-_dbg.mjs
+# Scripts jetables (debug, captures d'ecran...)
+_*.mjs
 
 # Flux GTFS-RT archive en local par tools/record-feed.mjs
 data/

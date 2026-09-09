@@ -289,6 +289,16 @@ ul {
   text-align: right;
 }
 
+/* Colour dot in the fleet recap tying a line's row to its map markers. */
+.line-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
 /* Shown below the map when several vehicles on the line have been stalled
    for a while -- a plain .status (muted/centered) doesn't stand out enough
    for something worth the user's attention. */
@@ -320,18 +330,26 @@ ul {
    strung out far from their real position the more of them were open at
    once. */
 
+/* Carries --veh (the zoom scale, see app.js applyZoomScale) down to the
+   badge/arrow, which compute their sizes from it. display:contents so it
+   generates no box -- the absolutely positioned .vehicle-pulse /
+   .vehicle-heading still resolve against the Leaflet marker icon. */
+.vehicle-scale {
+  display: contents;
+}
+
 .vehicle-badge {
   position: relative;
-  width: 24px;
-  height: 24px;
+  width: calc(24px * var(--veh, 1));
+  height: calc(24px * var(--veh, 1));
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #ffffff;
   font-weight: 700;
-  font-size: 12px;
-  border: 2px solid #ffffff;
+  font-size: calc(12px * var(--veh, 1));
+  border: calc(2px * var(--veh, 1)) solid #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
 }
 
@@ -371,24 +389,26 @@ ul {
 .vehicle-arrow {
   position: absolute;
   left: 50%;
-  top: -13px;
+  top: calc(-13px * var(--veh, 1));
   transform: translateX(-50%);
   width: 0;
   height: 0;
-  border-left: 9px solid transparent;
-  border-right: 9px solid transparent;
+  border-left: calc(9px * var(--veh, 1)) solid transparent;
+  border-right: calc(9px * var(--veh, 1)) solid transparent;
   /* Tall enough that its flat base sits well inside the circle rather than
      right at its edge -- .vehicle-badge (a same-sized circle painted after
      this in the html, so it stacks on top) then covers that base, leaving
      only a tip poking out whose visible edge follows the circle's own
      curve instead of a straight cut. */
-  border-bottom: 23px solid; /* color set inline (see vehicleDivIcon) */
+  border-bottom: calc(23px * var(--veh, 1)) solid; /* color set inline (see vehicleDivIcon) */
   /* A white outline the same 2px width as the badge's own border, so the
      tip reads clearly against a route line or another vehicle behind it --
      drop-shadow traces the triangle's actual silhouette rather than its
      (much bigger, mostly transparent) bounding box, which a plain
      box-shadow would use instead. */
-  filter: drop-shadow(2px 0 0 #fff) drop-shadow(-2px 0 0 #fff) drop-shadow(0 2px 0 #fff) drop-shadow(0 -2px 0 #fff);
+  --ow: calc(2px * var(--veh, 1));
+  filter: drop-shadow(var(--ow) 0 0 #fff) drop-shadow(calc(-1 * var(--ow)) 0 0 #fff) drop-shadow(0 var(--ow) 0 #fff)
+    drop-shadow(0 calc(-1 * var(--ow)) 0 #fff);
 }
 
 .vehicle-marker.is-stopped .vehicle-arrow {
@@ -405,7 +425,9 @@ ul {
 .vehicle-marker.is-moving .vehicle-pulse {
   display: block;
   position: absolute;
-  inset: 0;
+  /* Same 24px box as the badge, shrunk symmetrically by --veh (see
+     .vehicle-badge). The keyframe's scale() then grows it from there. */
+  inset: calc(50% - 12px * var(--veh, 1));
   border-radius: 50%;
   opacity: 0.55;
   animation: vehicle-pulse 1.6s ease-out infinite;
