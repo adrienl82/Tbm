@@ -116,6 +116,13 @@ input[type="search"] {
   font-size: 0.9rem;
 }
 
+/* Restate display:none for the hidden state -- the display:flex above
+   otherwise wins over the UA [hidden] rule (see section[hidden] earlier),
+   leaving the checkboxes visible on the fleet map. */
+.direction-filters[hidden] {
+  display: none;
+}
+
 .mode-filters label,
 .direction-filters label {
   display: flex;
