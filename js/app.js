@@ -7,8 +7,9 @@ import {
   fetchVehiclePositionsForRoutes,
   summarizeByDirection,
 } from "./vehiclePositions.js";
-import { isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
+import { distanceMeters, isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 import {
+  bearingBetween,
   distanceToStopAhead,
   estimateVehiclePosition,
   isStalled,
@@ -630,6 +631,16 @@ function syncVehicleMarkers(vehicles) {
       transition,
       stalledSince,
       isStalled: vehicleIsStalled,
+      // The direction-arrow element inside this marker's own icon, kept
+      // around so animateVehicles() can rotate it every frame directly
+      // (see there) rather than only on real refreshes -- setIcon just
+      // replaced the icon DOM node, so this has to be re-queried now
+      // rather than reused from the previous entry.
+      headingEl: marker.getElement()?.querySelector(".vehicle-heading") ?? null,
+      // Carried forward across refreshes so animateVehicles() can tell how
+      // far (and which way) the marker actually moved since last frame,
+      // instead of resetting to "no movement yet" every refresh.
+      lastAnimatedPosition: previous?.lastAnimatedPosition ?? null,
       // Distance to the line's own closest stop actually ahead of this
       // vehicle at this last known fix -- animateVehicles() uses it so a
       // fast vehicle's estimated position never creeps past a stop it's
@@ -708,6 +719,16 @@ async function refreshVehicles() {
 // centered on every frame as it moves -- setView with animate:false snaps
 // straight to the new center instead of stacking a pan transition on top
 // of one already running from the previous frame.
+// A dead-reckoned vehicle following a route polyline curves through turns
+// between real GPS fixes (see estimateVehiclePosition), but the arrow's
+// rotation was until now only set once per real refresh from the vehicle's
+// raw reported bearing -- it stayed frozen at that same angle through
+// REFRESH_INTERVAL_MS worth of on-screen curving, most noticeably wrong
+// right where a vehicle actually turns. Ignore movements smaller than this
+// (meters) when deriving a frame's heading -- floating-point noise on a
+// stopped vehicle's unchanging position, not an actual direction.
+const HEADING_UPDATE_MIN_METERS = 0.2;
+
 function animateVehicles() {
   const now = Date.now();
   for (const entry of activeVehicles) {
@@ -723,6 +744,15 @@ function animateVehicles() {
       }
     }
     marker.setLatLng(position);
+
+    if (entry.headingEl && entry.lastAnimatedPosition) {
+      const moved = distanceMeters(entry.lastAnimatedPosition, position);
+      if (moved >= HEADING_UPDATE_MIN_METERS) {
+        entry.headingEl.style.transform = `rotate(${bearingBetween(entry.lastAnimatedPosition, position)}deg)`;
+      }
+    }
+    entry.lastAnimatedPosition = position;
+
     if (vehicle.id && vehicle.id === followedVehicleId) {
       lineMap.setView(position, lineMap.getZoom(), { animate: false });
     }
