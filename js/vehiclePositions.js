@@ -160,6 +160,9 @@ function buildVehicle(vehicle) {
   const routeId = vehicle.trip?.routeId;
   return {
     id: vehicle.vehicle?.id || vehicle.trip?.tripId || "",
+    // The GTFS-RT trip id, kept so a followed vehicle can be matched against
+    // the trip-updates feed for its upcoming stops (see tripUpdates.js).
+    tripId: vehicle.trip?.tripId || null,
     label: vehicle.vehicle?.label ?? "",
     routeId: routeId !== undefined && routeId !== null ? String(routeId) : null,
     latitude: position.latitude,

@@ -256,11 +256,122 @@ ul {
   text-align: center;
 }
 
+/* Tabbed panel below the map: "Vehicules" (the recap table) plus, once a
+   vehicle is double-tapped, "Vehicule" (its next stops). */
+.map-tabs {
+  margin-top: 10px;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tab.is-active {
+  color: var(--text);
+  border-bottom-color: currentColor;
+}
+
+/* Small "close" affordance on the vehicle-detail tab. */
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.tab-close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.tab-pane {
+  padding-top: 10px;
+}
+
+/* The followed vehicle's line + destination + running delay. */
+.detail-header {
+  margin: 0 0 8px;
+  font-weight: 700;
+}
+
+.detail-delay {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.detail-delay.late {
+  color: #dc2626;
+}
+
+.detail-delay.early {
+  color: #2563eb;
+}
+
+.detail-delay.on-time {
+  color: var(--muted);
+}
+
+/* The list of upcoming stops with their estimated arrival. */
+.detail-stops {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+}
+
+.detail-stops li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-stops li:first-child {
+  font-weight: 700;
+}
+
+.detail-stops .eta {
+  color: var(--muted);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.detail-stops li:first-child .eta {
+  color: var(--text);
+}
+
 /* Small recap of vehicles currently in circulation on the open line, shown
    right below the map as a table: one row per direction. */
 .stats-table {
   width: 100%;
-  margin-top: 10px;
   border-collapse: collapse;
   font-size: 13px;
 }

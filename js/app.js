@@ -8,6 +8,7 @@ import {
   fetchVehiclePositionsForRoutes,
   summarizeByDirection,
 } from "./vehiclePositions.js";
+import { fetchTripStops } from "./tripUpdates.js";
 import { distanceMeters, isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 import {
   bearingBetween,
@@ -391,6 +392,10 @@ let activeVehicles = [];
 // on this id each time, so the selection and its open tooltip survive a
 // refresh instead of resetting to nothing.
 let followedVehicleId = null;
+// vehicle id -> timestamp of its last marker tap, for the manual
+// double-tap detection in syncVehicleMarkers.
+const lastVehicleTapAt = new Map();
+const DOUBLE_TAP_MS = 400;
 // The line's own trusted route shape (see openLineMap), as one or more
 // [lat, lon] arrays -- animateVehicles() makes estimated positions follow
 // this rather than cut across in a straight line. Empty when no route
@@ -696,6 +701,196 @@ function updateFleetStats(vehicles, context) {
   table.hidden = false;
 }
 
+// --- below-the-map tabs: "Tous" (the recap) plus one "next stops" tab per
+// vehicle the user has double-tapped. detailTabs maps a vehicle id to its
+// created DOM: { tabBtn, pane, headerEl, statusEl, listEl, renderToken }.
+// activeDetailId is the vehicle whose tab is showing, or null for "Tous".
+
+const detailTabs = new Map();
+let activeDetailId = null;
+
+function selectTab(vehicleId) {
+  activeDetailId = vehicleId;
+  const onAll = vehicleId === null;
+  const allBtn = document.getElementById("tab-vehicles");
+  allBtn.classList.toggle("is-active", onAll);
+  allBtn.setAttribute("aria-selected", String(onAll));
+  document.getElementById("pane-vehicles").hidden = !onAll;
+  for (const [id, tab] of detailTabs) {
+    const on = id === vehicleId;
+    tab.tabBtn.classList.toggle("is-active", on);
+    tab.tabBtn.setAttribute("aria-selected", String(on));
+    tab.pane.hidden = !on;
+  }
+}
+
+function closeDetailTab(vehicleId) {
+  const tab = detailTabs.get(vehicleId);
+  if (!tab) return;
+  tab.renderToken += 1; // drop any in-flight render for it
+  tab.tabBtn.remove();
+  tab.pane.remove();
+  detailTabs.delete(vehicleId);
+  if (activeDetailId === vehicleId) selectTab(null);
+}
+
+function closeAllDetailTabs() {
+  for (const id of [...detailTabs.keys()]) closeDetailTab(id);
+  selectTab(null);
+}
+
+// Run when a map (re)opens or closes so stale vehicles never linger.
+function resetMapTabs() {
+  closeAllDetailTabs();
+  document.getElementById("map-tabs").hidden = false;
+}
+
+// The short name shown on a detail tab: the vehicle's fleet number (the part
+// after the "operator:" prefix in its GTFS-RT id), or the raw id.
+function vehicleShortName(vehicle) {
+  const id = vehicle.id || "";
+  return id.includes(":") ? id.slice(id.lastIndexOf(":") + 1) : id || "?";
+}
+
+// Builds a vehicle's tab button (name + close "x") and its empty pane.
+function createDetailTab(vehicle) {
+  const tabBtn = document.createElement("button");
+  tabBtn.type = "button";
+  tabBtn.className = "tab";
+  tabBtn.setAttribute("role", "tab");
+  const name = document.createElement("span");
+  name.textContent = vehicleShortName(vehicle);
+  const close = document.createElement("span");
+  close.className = "tab-close";
+  close.title = "Fermer";
+  close.textContent = "×";
+  tabBtn.append(name, close);
+  tabBtn.addEventListener("click", () => {
+    selectTab(vehicle.id);
+    renderVehicleDetail(vehicle.id);
+  });
+  close.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeDetailTab(vehicle.id);
+  });
+  document.getElementById("tab-bar").appendChild(tabBtn);
+
+  const pane = document.createElement("div");
+  pane.className = "tab-pane";
+  pane.setAttribute("role", "tabpanel");
+  pane.hidden = true;
+  const headerEl = document.createElement("p");
+  headerEl.className = "detail-header";
+  const statusEl = document.createElement("p");
+  statusEl.className = "status";
+  statusEl.hidden = true;
+  const listEl = document.createElement("ol");
+  listEl.className = "detail-stops";
+  pane.append(headerEl, statusEl, listEl);
+  document.getElementById("map-tabs").appendChild(pane);
+
+  const tab = { tabBtn, pane, headerEl, statusEl, listEl, renderToken: 0 };
+  detailTabs.set(vehicle.id, tab);
+  return tab;
+}
+
+// Double-tapping a vehicle opens (or re-focuses) its "next stops" tab.
+function openVehicleDetail(vehicleId) {
+  const entry = activeVehicles.find((e) => e.vehicle.id === vehicleId);
+  if (!entry) return;
+  if (!detailTabs.has(vehicleId)) createDetailTab(entry.vehicle);
+  selectTab(vehicleId);
+  renderVehicleDetail(vehicleId);
+}
+
+// "dans 3 min (14:07)" -- the trip-updates feed's own predicted arrival,
+// with a relative countdown for anything within the hour.
+function formatEta(date, nowMs) {
+  const hm = formatTime(date).slice(0, 5);
+  const mins = Math.round((date.getTime() - nowMs) / 60000);
+  if (mins <= 0) return `imminent (${hm})`;
+  if (mins < 60) return `${mins} min (${hm})`;
+  return hm;
+}
+
+// Fills one vehicle's detail pane: destination + running delay, then the
+// trip's still-upcoming stops with an ETA each. Re-run for every open tab on
+// each refresh (the feed fetch is cached ~15s so this is one request total).
+async function renderVehicleDetail(vehicleId) {
+  const tab = detailTabs.get(vehicleId);
+  if (!tab) return;
+  const { headerEl, statusEl, listEl } = tab;
+  const entry = activeVehicles.find((e) => e.vehicle.id === vehicleId);
+
+  if (!entry) {
+    statusEl.textContent = "Ce vehicule n'est plus en circulation.";
+    statusEl.hidden = false;
+    return;
+  }
+  const { vehicle } = entry;
+  const { fallbackLabel } = vehicleStyle(vehicle);
+  headerEl.textContent = vehicle.label || fallbackLabel;
+
+  if (!vehicle.tripId) {
+    statusEl.textContent = "Prochains arrets indisponibles pour ce vehicule.";
+    statusEl.hidden = false;
+    listEl.innerHTML = "";
+    return;
+  }
+
+  const token = ++tab.renderToken;
+  let trip;
+  try {
+    trip = await fetchTripStops(vehicle.tripId);
+  } catch (err) {
+    console.error("Impossible de charger les prochains passages :", err);
+    if (detailTabs.get(vehicleId)?.renderToken === token) {
+      statusEl.textContent = "Prochains passages momentanement indisponibles.";
+      statusEl.hidden = false;
+    }
+    return;
+  }
+  // The tab may have been closed, or a newer render started, while this was
+  // in flight.
+  if (detailTabs.get(vehicleId)?.renderToken !== token) return;
+
+  if (trip && trip.delaySec !== null && Math.abs(trip.delaySec) >= 60) {
+    const late = trip.delaySec > 0;
+    const delayEl = document.createElement("span");
+    delayEl.className = `detail-delay ${late ? "late" : "early"}`;
+    delayEl.textContent = ` · ${late ? "+" : "−"}${Math.round(Math.abs(trip.delaySec) / 60)} min`;
+    headerEl.appendChild(delayEl);
+  }
+
+  if (!trip || trip.stops.length === 0) {
+    statusEl.textContent = "Aucun prochain arret annonce pour ce trajet.";
+    statusEl.hidden = false;
+    listEl.innerHTML = "";
+    return;
+  }
+
+  statusEl.hidden = true;
+  listEl.innerHTML = "";
+  const nowMs = Date.now();
+  for (const stop of trip.stops) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    // Stop names come from the loaded SIRI stop list (currentStopNames);
+    // fall back to the raw id for a stop the open line's list doesn't cover.
+    name.textContent = (stop.stopId && currentStopNames.get(stop.stopId)) || `Arret ${stop.stopId ?? "?"}`;
+    const eta = document.createElement("span");
+    eta.className = "eta";
+    const when = stop.arrival ?? stop.departure;
+    eta.textContent = when ? formatEta(when, nowMs) : "heure inconnue";
+    li.append(name, eta);
+    listEl.appendChild(li);
+  }
+}
+
+function renderOpenDetailTabs() {
+  for (const id of detailTabs.keys()) renderVehicleDetail(id);
+}
+
 // Rebuilds the vehicle markers layer from a fresh vehicle list, matched by
 // id against the previous refresh's markers so a vehicle already on screen
 // keeps the same marker -- and so its open tooltip, follow ring and
@@ -758,7 +953,21 @@ function syncVehicleMarkers(vehicles) {
         })
         .addTo(vehicleLayer);
       if (vehicle.id) {
-        marker.on("click", () => setFollowedVehicle(vehicle.id));
+        // Single tap follows the vehicle; a quick second tap opens its "next
+        // stops" tab. Detecting the double tap off Leaflet's own `dblclick`
+        // proved unreliable (touch, and the map's own double-tap zoom
+        // swallowing it), so it's timed off plain `click` here.
+        marker.on("click", () => {
+          const now = Date.now();
+          if (now - (lastVehicleTapAt.get(vehicle.id) ?? 0) < DOUBLE_TAP_MS) {
+            lastVehicleTapAt.delete(vehicle.id);
+            setFollowedVehicle(vehicle.id); // cancel the first tap's follow toggle
+            openVehicleDetail(vehicle.id);
+          } else {
+            lastVehicleTapAt.set(vehicle.id, now);
+            setFollowedVehicle(vehicle.id);
+          }
+        });
       }
     }
     // A freshly (re)opened tooltip so the selection reads as continuous
@@ -827,6 +1036,7 @@ async function refreshVehicles() {
       const stalledCount = syncVehicleMarkers(filtered);
       updateVehicleStats(filtered, passage);
       updateLineIncidentStatus(stalledCount);
+      renderOpenDetailTabs();
     } catch (err) {
       console.error("Impossible de charger les positions des vehicules :", err);
     }
@@ -843,6 +1053,7 @@ async function refreshVehicles() {
       updateFleetStats(vehicles, context);
       document.getElementById("map-status").textContent =
         `${vehicles.length} ${context.mode === "tram" ? "trams" : "bus"} en circulation`;
+      renderOpenDetailTabs();
     } catch (err) {
       console.error("Impossible de charger les positions des vehicules :", err);
     }
@@ -945,6 +1156,7 @@ async function openLineMap(passage) {
   statusEl.textContent = "";
   document.getElementById("line-incident").hidden = true;
   document.getElementById("vehicle-stats").hidden = true;
+  resetMapTabs();
   // The line list opens the map straight from search; a passage badge opens
   // it from the board. "Retour" should go back to whichever that was.
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
@@ -1094,6 +1306,7 @@ async function openFleetMap(mode) {
   statusEl.textContent = "";
   document.getElementById("line-incident").hidden = true;
   document.getElementById("vehicle-stats").hidden = true;
+  resetMapTabs();
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
   showScreen("map");
   const map = ensureLineMap();
@@ -1149,6 +1362,7 @@ function closeLineMap() {
   activeVehicles = [];
   currentRoutePolylines = [];
   followedVehicleId = null;
+  closeAllDetailTabs();
   currentLinePassage = null;
   currentFleetContext = null;
 }
@@ -1229,6 +1443,8 @@ document.getElementById("back-from-map").addEventListener("click", () => {
   closeLineMap();
   showScreen(mapReturnScreen);
 });
+
+document.getElementById("tab-vehicles").addEventListener("click", () => selectTab(null));
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
   showScreen("favorites");
