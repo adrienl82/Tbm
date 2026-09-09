@@ -236,6 +236,21 @@ export function isActuallyMoving(vehicle) {
   return vehicle.moving && vehicle.speedKmh !== 0;
 }
 
+// When a vehicle is first observed not actually moving (see
+// isActuallyMoving), the stalled clock (see trackStalledSince) should
+// start from whichever is earlier: right now, or the vehicle's own last
+// reported fix. A fix that's already old by the time we first see it --
+// GTFS-RT has stopped refreshing this vehicle's position at all, itself a
+// sign something's wrong -- is stronger evidence of how long it's actually
+// been stuck than treating this exact moment (whenever a page happens to
+// load or reopen this line) as when the problem began. Never later than
+// now, in case of clock skew or a genuinely fresh fix; nowMs itself when
+// no timestamp is available at all.
+export function earliestStillSince(vehicleTimestampMs, nowMs) {
+  if (vehicleTimestampMs === null || vehicleTimestampMs === undefined) return nowMs;
+  return Math.min(vehicleTimestampMs, nowMs);
+}
+
 // Tracks how long a vehicle has been continuously stopped across refreshes.
 // A single fix's own timestamp only says when it was last observed, not how
 // long it's actually been sitting there, so this instead carries the

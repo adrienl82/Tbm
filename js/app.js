@@ -11,6 +11,7 @@ import { distanceMeters, isNearAnyPoint, shapeCoversStops } from "./geoBounds.js
 import {
   bearingBetween,
   distanceToStopAhead,
+  earliestStillSince,
   estimateVehiclePosition,
   isActuallyMoving,
   isStalled,
@@ -584,11 +585,18 @@ function syncVehicleMarkers(vehicles) {
     const previous = vehicle.id ? previousById.get(vehicle.id) : null;
     if (vehicle.id) seenIds.add(vehicle.id);
 
-    // How long this vehicle has been continuously stopped, carried
-    // forward across refreshes (matched by id) rather than reset every
-    // time -- a single fix's timestamp only says when it was last
-    // observed, not how long it's actually been sitting there.
-    const stalledSince = trackStalledSince(isActuallyMoving(vehicle), previous?.stalledSince ?? null, Date.now());
+    // How long this vehicle has been continuously stopped, carried forward
+    // across refreshes (matched by id) rather than reset every time. The
+    // very first time it's noticed not actually moving, the clock starts
+    // from its own last reported fix rather than from right now (see
+    // earliestStillSince) -- otherwise reopening this line (or just
+    // reloading the page) would reset a vehicle that's already been stuck
+    // for a while back to a fresh STALLED_THRESHOLD_MS countdown.
+    const stalledSince = trackStalledSince(
+      isActuallyMoving(vehicle),
+      previous?.stalledSince ?? null,
+      earliestStillSince(vehicle.timestamp?.getTime() ?? null, Date.now()),
+    );
     const vehicleIsStalled = isStalled(stalledSince, Date.now(), STALLED_THRESHOLD_MS);
 
     const { letter, color, fallbackLabel } = vehicleStyle(vehicle);

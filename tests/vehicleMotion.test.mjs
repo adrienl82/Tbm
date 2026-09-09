@@ -5,6 +5,7 @@ import {
   decelerateTowardStop,
   destinationPoint,
   distanceToStopAhead,
+  earliestStillSince,
   estimateVehiclePosition,
   isActuallyMoving,
   isStalled,
@@ -263,6 +264,21 @@ test("isActuallyMoving overrides GTFS's own moving status when speed is confirme
 test("isActuallyMoving is false when GTFS reports the vehicle stopped, regardless of speed", () => {
   assert.equal(isActuallyMoving({ moving: false, speedKmh: 0 }), false);
   assert.equal(isActuallyMoving({ moving: false, speedKmh: null }), false);
+});
+
+test("earliestStillSince uses the vehicle's own timestamp when it's older than now", () => {
+  assert.equal(earliestStillSince(1000, 9000), 1000);
+});
+
+test("earliestStillSince never returns a time later than now", () => {
+  // A fix reported in the future (clock skew, or just a very fresh one)
+  // shouldn't push the stalled clock's start forward past right now.
+  assert.equal(earliestStillSince(9000, 1000), 1000);
+});
+
+test("earliestStillSince falls back to now when there's no vehicle timestamp", () => {
+  assert.equal(earliestStillSince(null, 5000), 5000);
+  assert.equal(earliestStillSince(undefined, 5000), 5000);
 });
 
 test("trackStalledSince returns null while the vehicle is moving", () => {
