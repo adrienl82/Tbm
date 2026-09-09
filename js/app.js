@@ -1103,9 +1103,9 @@ async function refreshVehicles() {
       // fetch was in flight.
       if (currentFleetContext !== context) return;
       syncVehicleMarkers(vehicles);
+      // The running count lives in the recap caption below the map
+      // (updateFleetStats); #map-status stays for load errors only.
       updateFleetStats(vehicles, context);
-      document.getElementById("map-status").textContent =
-        `${vehicles.length} ${context.mode === "tram" ? "trams" : "bus"} en circulation`;
       renderOpenDetailTabs();
     } catch (err) {
       console.error("Impossible de charger les positions des vehicules :", err);

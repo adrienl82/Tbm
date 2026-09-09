@@ -276,6 +276,12 @@ ul {
   text-align: center;
 }
 
+/* An empty status line (e.g. #map-status when there's no error) shouldn't
+   reserve a paragraph's worth of blank space above the map. */
+.status:empty {
+  display: none;
+}
+
 /* Tabbed panel below the map: "Vehicules" (the recap table) plus, once a
    vehicle is double-tapped, "Vehicule" (its next stops). */
 .map-tabs {
