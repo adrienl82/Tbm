@@ -11,12 +11,17 @@ depuis un PC via l'add-on Samba.
 1. **Copier le dossier de l'add-on dans HA.** Il doit se retrouver sous
    `/addons/tbm-recorder/` sur le Pi. Au choix :
    - add-on **Samba share** activé → depuis le PC, ouvrir
-     `\\homeassistant\addons\`, y créer `tbm-recorder\` et y copier les 4
-     fichiers (`config.yaml`, `build.yaml`, `Dockerfile`, `run.sh`) ;
+     `\\homeassistant\addons\`, y créer `tbm-recorder\` et y copier tout le
+     contenu de `tools/hass-addon/` (`config.yaml`, `build.yaml`,
+     `Dockerfile`, `run.sh`, `icon.png`, `logo.png`) ;
    - ou add-on **Studio Code Server** / **File editor** → créer
      `/addons/tbm-recorder/` et coller les fichiers ;
    - ou en SSH : `git clone` le repo puis
      `cp -r Tbm/tools/hass-addon /addons/tbm-recorder`.
+
+   `icon.png` (icône carrée dans la boutique) et `logo.png` (bandeau en haut
+   de la page de l'add-on) sont facultatifs mais font une vraie différence
+   visuelle ; ils sont pris en compte après un **Rebuild** de l'add-on.
 
 2. **Paramètres → Modules complémentaires → Boutique**, menu ⋮ en haut à
    droite → **Vérifier les mises à jour**. L'add-on **« TBM Feed Recorder »**
