@@ -1,5 +1,5 @@
 name: "TBM Feed Recorder"
-version: "1.1.0"
+version: "1.2.0"
 slug: "tbm_recorder"
 description: "Archive le flux GTFS-RT (positions vehicules TBM) sur /share pour analyse offline"
 url: "https://github.com/adrienl82/Tbm/tree/main/tools/hass-addon"
@@ -17,11 +17,15 @@ options:
   interval: 20
   trips: true
   alerts: true
+  session_cut: "04:00"
+  session_gap_min: 45
   keep_days: 14
   git_ref: "claude/mobile-app-rss-tbm-kaob9e"
 schema:
   interval: "int(5,)"
   trips: "bool"
   alerts: "bool"
+  session_cut: "match(^[0-2][0-9]:[0-5][0-9]$)"
+  session_gap_min: "int(1,)"
   keep_days: "int(0,)"
   git_ref: "str"

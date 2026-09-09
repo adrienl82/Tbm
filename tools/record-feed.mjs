@@ -11,25 +11,34 @@
 //   npm install                # once, pulls protobufjs
 //   node tools/record-feed.mjs # Ctrl+C to stop cleanly
 //
+// Output is split by *service session* (see tools/lib/serviceSession.mjs), not
+// by calendar day: a session opens when vehicles start circulating and closes
+// at the early-morning cut time or when service ends. A closed session dir
+// gets a DONE sentinel -- that's the analyzer's trigger.
+//
 // Options:
-//   --interval <sec>  seconds between polls (default 20; feed refreshes ~10-30s)
-//   --out <dir>       output root (default ./data)
-//   --trips           also record the trip-updates feed (per-trip delays)
-//   --alerts          also record the service-alerts feed (disruptions)
-//   --raw             also keep every raw vehicles protobuf response, gzipped
-//   --once            poll a single time, print a summary, exit (smoke test)
+//   --interval <sec>       seconds between polls (default 20; feed refreshes ~10-30s)
+//   --out <dir>            output root (default ./data)
+//   --trips                also record the trip-updates feed (per-trip delays)
+//   --alerts               also record the service-alerts feed (disruptions)
+//   --raw                  also keep every raw vehicles protobuf response, gzipped
+//   --session-cut <HH:MM>  daily session cut time, local (default 04:00)
+//   --session-gap-min <n>  minutes with no vehicle before a session ends (default 45)
+//   --once                 poll a single time, print a summary, exit (smoke test)
 //
-// Output layout (rotates automatically at midnight, local time):
-//   data/2026-09-09/vehicles-2026-09-09.ndjson     one row per new vehicle fix
-//   data/2026-09-09/trips-2026-09-09.ndjson         one row per trip when its delay moves (--trips)
-//   data/2026-09-09/alerts-2026-09-09.ndjson        one row per alert when it appears/changes (--alerts)
-//   data/2026-09-09/raw/153201.pb.gz                (--raw)
-//   data/2026-09-09/meta.json                       (run info + counters)
+// Output layout:
+//   data/state.json                          current session pointer + last cut date
+//   data/session-20260909T0412/
+//     vehicles.ndjson                         one row per new vehicle fix
+//     trips.ndjson                            one row per trip when its delay moves (--trips)
+//     alerts.ndjson                           one row per alert when it appears/changes (--alerts)
+//     raw/153201.pb.gz                        (--raw)
+//     meta.json                               run info + counters (+ end/closed_by once closed)
+//     DONE                                    written when the session closes
 //
-// Analyse later with DuckDB (`SELECT ... FROM 'data/2026-09-09/vehicles-*.ndjson'`)
-// or pandas (`pd.read_json(path, lines=True)`). Gzip the .ndjson files when a
-// day is done (`gzip data/2026-09-09/*.ndjson`) -- DuckDB and pandas both
-// read .ndjson.gz directly.
+// Session ids are compact UTC (session open minute). Analyse later with DuckDB
+// (`SELECT ... FROM 'data/session-*/vehicles.ndjson'`) or pandas; gzip a closed
+// session's .ndjson files (DuckDB and pandas read .ndjson.gz directly).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -38,6 +47,7 @@ import { createRequire } from "node:module";
 
 import { FEED_URL, decodeFeedMessage } from "../js/vehiclePositions.js";
 import { isValidCoordinate } from "../js/geoBounds.js";
+import { initialState, step } from "./lib/serviceSession.mjs";
 
 const require = createRequire(import.meta.url);
 let protobuf;
@@ -61,7 +71,16 @@ const TRIP_DELAY_EPSILON_SEC = 30;
 // --- CLI args -------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { interval: 20, out: "data", raw: false, trips: false, alerts: false, once: false };
+  const opts = {
+    interval: 20,
+    out: "data",
+    raw: false,
+    trips: false,
+    alerts: false,
+    once: false,
+    sessionCut: "04:00",
+    sessionGapMin: 45,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--interval") opts.interval = Number(argv[++i]);
@@ -69,9 +88,11 @@ function parseArgs(argv) {
     else if (arg === "--raw") opts.raw = true;
     else if (arg === "--trips") opts.trips = true;
     else if (arg === "--alerts") opts.alerts = true;
+    else if (arg === "--session-cut") opts.sessionCut = argv[++i];
+    else if (arg === "--session-gap-min") opts.sessionGapMin = Number(argv[++i]);
     else if (arg === "--once") opts.once = true;
     else if (arg === "--help" || arg === "-h") {
-      console.log(fs.readFileSync(new URL(import.meta.url)).toString().split("\n").slice(1, 40).join("\n").replace(/^\/\/ ?/gm, ""));
+      console.log(fs.readFileSync(new URL(import.meta.url)).toString().split("\n").slice(1, 46).join("\n").replace(/^\/\/ ?/gm, ""));
       process.exit(0);
     } else {
       console.error(`option inconnue : ${arg}`);
@@ -82,91 +103,155 @@ function parseArgs(argv) {
     console.error("--interval doit etre un nombre de secondes >= 1");
     process.exit(1);
   }
+  if (!/^\d{2}:\d{2}$/.test(opts.sessionCut)) {
+    console.error("--session-cut doit etre au format HH:MM");
+    process.exit(1);
+  }
+  if (!Number.isFinite(opts.sessionGapMin) || opts.sessionGapMin < 1) {
+    console.error("--session-gap-min doit etre un nombre de minutes >= 1");
+    process.exit(1);
+  }
   return opts;
 }
 
 const opts = parseArgs(process.argv.slice(2));
 
-// --- date-rotated output writers ----------------------------------------
+// --- session state (persisted so a restart resumes the running session) ---
 
-function localDateString(d = new Date()) {
+function localParts(d = new Date()) {
   const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return {
+    date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+    hm: `${p(d.getHours())}:${p(d.getMinutes())}`,
+  };
 }
 
-// One set of append streams per calendar day; when the day rolls over the
-// old streams are flushed and closed and a fresh dir is opened.
-const writers = {
-  date: null,
-  dir: null,
-  vehicles: null,
-  trips: null,
-  alerts: null,
-};
+const STATE_PATH = path.join(opts.out, "state.json");
+let sessionState = initialState();
 
-function rotateTo(date) {
-  if (writers.date === date) return;
-  closeWriters();
-  const dir = path.join(opts.out, date);
+function loadState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+    if (raw && typeof raw === "object") {
+      sessionState = { session: raw.session ?? null, lastCutDate: raw.lastCutDate ?? null };
+    }
+  } catch {
+    /* no state file yet -- first run */
+  }
+}
+
+function saveState() {
+  try {
+    fs.mkdirSync(opts.out, { recursive: true });
+    fs.writeFileSync(STATE_PATH, JSON.stringify(sessionState));
+  } catch (err) {
+    console.error(`state.json non ecrit : ${err.message}`);
+  }
+}
+
+// --- per-session output streams --------------------------------------
+
+const writers = { id: null, dir: null, startedAt: null, vehicles: null, trips: null, alerts: null };
+
+function openSession(id, startedAtISO) {
+  const dir = path.join(opts.out, `session-${id}`);
   fs.mkdirSync(dir, { recursive: true });
   if (opts.raw) fs.mkdirSync(path.join(dir, "raw"), { recursive: true });
-  writers.date = date;
+  writers.id = id;
   writers.dir = dir;
-  writers.vehicles = fs.createWriteStream(path.join(dir, `vehicles-${date}.ndjson`), { flags: "a" });
-  if (opts.trips) {
-    writers.trips = fs.createWriteStream(path.join(dir, `trips-${date}.ndjson`), { flags: "a" });
-  }
-  if (opts.alerts) {
-    writers.alerts = fs.createWriteStream(path.join(dir, `alerts-${date}.ndjson`), { flags: "a" });
-  }
-  console.error(`[${new Date().toISOString()}] ecriture dans ${dir}/`);
+  writers.startedAt = startedAtISO;
+  writers.vehicles = fs.createWriteStream(path.join(dir, "vehicles.ndjson"), { flags: "a" });
+  if (opts.trips) writers.trips = fs.createWriteStream(path.join(dir, "trips.ndjson"), { flags: "a" });
+  if (opts.alerts) writers.alerts = fs.createWriteStream(path.join(dir, "alerts.ndjson"), { flags: "a" });
+  // Each session file is self-contained: drop the in-memory dedup so the
+  // first poll of the session writes a full snapshot, then deltas.
+  lastFixTs.clear();
+  lastTripDelay.clear();
+  lastAlertHash.clear();
+  sessionCounters = { polls: 0, vehicleRows: 0, tripRows: 0, alertRows: 0 };
 }
 
-function closeWriters() {
+function endStreams() {
   writers.vehicles?.end();
   writers.trips?.end();
   writers.alerts?.end();
-  writers.vehicles = null;
-  writers.trips = null;
-  writers.alerts = null;
+  writers.vehicles = writers.trips = writers.alerts = null;
+}
+
+// Finalize the open session: meta.json (with end/closed_by) + a DONE
+// sentinel the analyzer watches for.
+function closeSession(reason, endedAtISO) {
+  if (!writers.dir) return;
+  const dir = writers.dir;
+  const id = writers.id;
+  writeMeta({ end: endedAtISO, closed_by: reason });
+  endStreams();
+  try {
+    fs.writeFileSync(path.join(dir, "DONE"), `${endedAtISO} ${reason}\n`);
+  } catch (err) {
+    console.error(`DONE non ecrit : ${err.message}`);
+  }
+  console.error(`[${endedAtISO}] session ${id} fermee (${reason})`);
+  writers.id = writers.dir = writers.startedAt = null;
 }
 
 // --- dedup: a vehicle's own fix timestamp only moves forward, so emit a row
 // only when we see a newer fix than the last one recorded for that vehicle.
-// Bounded memory (~one entry per active vehicle), unlike keeping every
-// (id, ts) pair seen all day. Vehicles with no timestamp are always emitted.
+// Bounded memory (~one entry per active vehicle). Cleared at each session
+// open (see openSession). Vehicles with no timestamp are always emitted.
 const lastFixTs = new Map();
 // trip_id -> last delay (s) written; alert_id -> hash of last state written.
 const lastTripDelay = new Map();
 const lastAlertHash = new Map();
 
 const counters = {
-  startedAt: new Date().toISOString(),
+  startedAt: new Date().toISOString(), // process start (not session start)
   polls: 0,
   errors: 0,
-  vehicleRowsWritten: 0,
-  tripRowsWritten: 0,
-  alertRowsWritten: 0,
   lastPollAt: null,
   lastVehicleCount: 0,
 };
+// reset per session in openSession
+let sessionCounters = { polls: 0, vehicleRows: 0, tripRows: 0, alertRows: 0 };
 
-function writeMeta() {
+function writeMeta(extra = {}) {
   if (!writers.dir) return;
   const meta = {
-    ...counters,
+    session: writers.id,
+    start: writers.startedAt,
+    polls: sessionCounters.polls,
+    vehicleRowsWritten: sessionCounters.vehicleRows,
+    tripRowsWritten: sessionCounters.tripRows,
+    alertRowsWritten: sessionCounters.alertRows,
+    processErrors: counters.errors,
+    lastPollAt: counters.lastPollAt,
+    lastVehicleCount: counters.lastVehicleCount,
     feedUrl: FEED_URL,
     intervalSec: opts.interval,
+    sessionCut: opts.sessionCut,
+    sessionGapMin: opts.sessionGapMin,
     raw: opts.raw,
     trips: opts.trips,
     alerts: opts.alerts,
     updatedAt: new Date().toISOString(),
+    ...extra,
   };
   try {
     fs.writeFileSync(path.join(writers.dir, "meta.json"), JSON.stringify(meta, null, 2));
   } catch (err) {
     console.error(`meta.json non ecrit : ${err.message}`);
   }
+}
+
+// vehicles genuinely circulating right now (valid position) -- drives the
+// session state machine; independent of the write-time dedup.
+function countLive(decoded) {
+  let n = 0;
+  for (const entity of decoded?.entity ?? []) {
+    const pos = entity.vehicle?.position;
+    if (pos && isValidCoordinate(pos.latitude, pos.longitude)) n += 1;
+  }
+  return n;
 }
 
 // --- one poll ----------------------------------------------------------
@@ -302,25 +387,51 @@ async function fetchDecoded(url) {
 
 async function pollOnce() {
   const now = new Date();
-  rotateTo(localDateString(now));
   const recordedAt = now.toISOString();
+  const { date: localDate, hm: localHM } = localParts(now);
 
   const bytes = await fetchBytes(FEED_URL);
+  const decoded = decodeFeedMessage(bytes, protobuf);
+  const live = countLive(decoded);
+
+  // Advance the service-session machine before writing anything: a boundary
+  // this poll must land in the right session dir.
+  const { state, events } = step(sessionState, {
+    now,
+    liveVehicleCount: live,
+    localDate,
+    localHM,
+    cutLocal: opts.sessionCut,
+    gapMin: opts.sessionGapMin,
+  });
+  for (const ev of events) {
+    if (ev.type === "close") closeSession(ev.reason, ev.at.toISOString());
+    else if (ev.type === "open") {
+      openSession(ev.sessionId, ev.at.toISOString());
+      console.error(`[${ev.at.toISOString()}] session ${ev.sessionId} ouverte -> ${writers.dir}/`);
+    }
+  }
+  sessionState = state;
+  saveState();
+
+  counters.polls += 1;
+  counters.lastPollAt = recordedAt;
+  counters.lastVehicleCount = live;
+
+  if (!writers.dir) {
+    // Between sessions (early-morning lull): nothing to record.
+    return { live, newRows: 0, tripRows: 0 };
+  }
+  sessionCounters.polls += 1;
+
   if (opts.raw) {
     const stamp = recordedAt.slice(11, 19).replace(/:/g, "");
     fs.writeFileSync(path.join(writers.dir, "raw", `${stamp}.pb.gz`), zlib.gzipSync(bytes));
   }
 
-  const decoded = decodeFeedMessage(bytes, protobuf);
   const rows = vehicleRows(decoded, recordedAt);
-  if (rows.length > 0) {
-    writers.vehicles.write(rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  }
-
-  counters.polls += 1;
-  counters.lastPollAt = recordedAt;
-  counters.lastVehicleCount = (decoded?.entity ?? []).length;
-  counters.vehicleRowsWritten += rows.length;
+  if (rows.length > 0) writers.vehicles.write(rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  sessionCounters.vehicleRows += rows.length;
 
   let tripCount = 0;
   if (opts.trips) {
@@ -328,7 +439,7 @@ async function pollOnce() {
       const trips = tripRows(await fetchDecoded(TRIPS_FEED_URL), recordedAt);
       tripCount = trips.length;
       if (trips.length > 0) writers.trips.write(trips.map((r) => JSON.stringify(r)).join("\n") + "\n");
-      counters.tripRowsWritten += trips.length;
+      sessionCounters.tripRows += trips.length;
     } catch (err) {
       console.error(`[${recordedAt}] trips: ${err.message}`);
     }
@@ -338,13 +449,13 @@ async function pollOnce() {
     try {
       const alerts = alertRows(await fetchDecoded(ALERTS_FEED_URL), recordedAt);
       if (alerts.length > 0) writers.alerts.write(alerts.map((r) => JSON.stringify(r)).join("\n") + "\n");
-      counters.alertRowsWritten += alerts.length;
+      sessionCounters.alertRows += alerts.length;
     } catch (err) {
       console.error(`[${recordedAt}] alerts: ${err.message}`);
     }
   }
 
-  return { vehicles: counters.lastVehicleCount, newRows: rows.length, tripRows: tripCount };
+  return { live, newRows: rows.length, tripRows: tripCount };
 }
 
 // --- run loop --------------------------------------------------------
@@ -355,14 +466,15 @@ async function loop() {
   while (!stopping) {
     const tick = Date.now();
     try {
-      const { vehicles, newRows, tripRows: tRows } = await pollOnce();
+      const { live, newRows, tripRows: tRows } = await pollOnce();
       if (counters.polls % 10 === 0 || counters.polls === 1) {
+        const where = writers.id ? `session ${writers.id}` : "hors session";
         console.error(
-          `[${counters.lastPollAt}] poll #${counters.polls} : ${vehicles} vehicules, +${newRows} lignes` +
+          `[${counters.lastPollAt}] poll #${counters.polls} (${where}) : ${live} vehicules, +${newRows} lignes` +
             (opts.trips ? `, +${tRows} trips` : "") +
-            ` (total ${counters.vehicleRowsWritten} veh` +
-            (opts.trips ? `, ${counters.tripRowsWritten} trips` : "") +
-            (opts.alerts ? `, ${counters.alertRowsWritten} alerts` : "") +
+            ` (session ${sessionCounters.vehicleRows} veh` +
+            (opts.trips ? `, ${sessionCounters.tripRows} trips` : "") +
+            (opts.alerts ? `, ${sessionCounters.alertRows} alerts` : "") +
             `, ${counters.errors} erreurs)`,
         );
       }
@@ -385,13 +497,17 @@ async function loop() {
 
 const shutdownResolvers = [];
 
+// Stopping the recorder does NOT close the running session -- it's still the
+// same operating day, and the next start resumes it (see resumeOrStart). We
+// just flush an interim meta.json + state.json.
 function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   console.error(`\n[${new Date().toISOString()}] ${signal} recu, on ferme proprement...`);
   while (shutdownResolvers.length) shutdownResolvers.pop()();
   writeMeta();
-  closeWriters();
+  endStreams();
+  saveState();
   // Give the streams a beat to flush their buffers before exit.
   setTimeout(() => process.exit(0), 200);
 }
@@ -399,16 +515,30 @@ function shutdown(signal) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
+// On startup, if state.json says a session was running, reopen its streams so
+// this run appends to it. The first poll's step() will cleanly close it
+// (gap/cut) and open a fresh one if it has since gone stale.
+function resumeOrStart() {
+  loadState();
+  if (sessionState.session) {
+    const { id, startedAt } = sessionState.session;
+    openSession(id, startedAt);
+    console.error(`[${new Date().toISOString()}] reprise de la session ${id}`);
+  }
+}
+
 if (opts.once) {
+  resumeOrStart();
   pollOnce()
     .then((r) => {
       writeMeta();
-      closeWriters();
+      endStreams();
+      saveState();
       console.error(
-        `OK : ${r.vehicles} vehicules dans le flux, ${r.newRows} lignes` +
+        `OK : ${r.live} vehicules, ${r.newRows} lignes` +
           (opts.trips ? `, ${r.tripRows} trips` : "") +
-          (opts.alerts ? `, ${counters.alertRowsWritten} alerts` : "") +
-          ` ecrites dans ${writers.dir}/`,
+          (opts.alerts ? `, ${sessionCounters.alertRows} alerts` : "") +
+          (writers.dir ? ` -> ${writers.dir}/` : " (hors session, rien ecrit)"),
       );
       setTimeout(() => process.exit(0), 200);
     })
@@ -418,7 +548,9 @@ if (opts.once) {
     });
 } else {
   console.error(
-    `Enregistrement du flux TBM toutes les ${opts.interval}s -> ${opts.out}/<date>/  (Ctrl+C pour arreter)`,
+    `Enregistrement du flux TBM toutes les ${opts.interval}s -> ${opts.out}/session-*/  ` +
+      `(coupe ${opts.sessionCut}, gap ${opts.sessionGapMin}min, Ctrl+C pour arreter)`,
   );
+  resumeOrStart();
   loop();
 }

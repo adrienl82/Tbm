@@ -3,7 +3,8 @@
 Fait tourner [`tools/record-feed.mjs`](../record-feed.mjs) en permanence sur un
 Home Assistant OS (Raspberry Pi), avec démarrage au boot, redémarrage
 automatique (watchdog) et logs dans l'interface HA. L'archive est écrite dans
-`/share/tbm/<date>/` — récupérable depuis un PC via l'add-on Samba.
+`/share/tbm/session-*/` (un dossier par session de service) — récupérable
+depuis un PC via l'add-on Samba.
 
 ## Installation (add-on local)
 
@@ -30,6 +31,8 @@ automatique (watchdog) et logs dans l'interface HA. L'archive est écrite dans
    | `interval` | `20` | secondes entre deux relevés du flux |
    | `trips` | `true` | enregistrer aussi le flux trip-updates (retard par course) |
    | `alerts` | `true` | enregistrer aussi le flux perturbations |
+   | `session_cut` | `04:00` | heure locale de coupe quotidienne d'une session |
+   | `session_gap_min` | `45` | minutes sans véhicule avant de clôturer une session |
    | `keep_days` | `14` | jours d'archive gardés (`0` = ne jamais purger) |
    | `git_ref` | `claude/mobile-app-rss-tbm-kaob9e` | branche/tag du repo à utiliser |
 
@@ -37,9 +40,9 @@ automatique (watchdog) et logs dans l'interface HA. L'archive est écrite dans
    **« Watchdog »** (redémarre l'add-on s'il plante), puis **Démarrer**.
 
 6. Onglet **Journal** : vérifier la ligne
-   `Demarrage : record-feed --interval 20 --trips --alerts --out /share/tbm`
+   `Demarrage : record-feed --interval 20 --trips --alerts --session-cut 04:00 …`
    puis, toutes les ~10 relevés,
-   `poll #N : X vehicules, +Y lignes, +Z trips`.
+   `poll #N (session …) : X vehicules, +Y lignes, +Z trips`.
 
 ## Comment ça tourne
 
@@ -47,30 +50,35 @@ automatique (watchdog) et logs dans l'interface HA. L'archive est écrite dans
   `npm install` → l'add-on utilise toujours la dernière version du recorder
   sans rebuild. Pour prendre en compte un nouveau commit : **redémarrer**
   l'add-on.
-- Le recorder interroge le flux positions véhicules toutes les `interval`
-  secondes et écrit `/share/tbm/<date>/vehicles-<date>.ndjson` (une ligne par
-  nouveau point GPS, dédupliqué). Rotation automatique à minuit.
-- Une fois par heure, `run.sh` **gzippe** les `.ndjson` des jours terminés et
-  **supprime** les dossiers de plus de `keep_days` jours.
-- **Arrêter** l'add-on envoie un SIGTERM au recorder → flush + `meta.json` +
-  sortie propre.
+- Le recorder écrit une **session de service** par dossier
+  `/share/tbm/session-<ouverture UTC>/` : ouverture au 1ᵉʳ véhicule, fermeture
+  à `session_cut` (heure locale) ou après `session_gap_min` minutes sans
+  véhicule. À la fermeture il pose un fichier `DONE` (le déclencheur de
+  l'analyse à venir) et complète `meta.json`.
+- **Arrêter** l'add-on ne ferme *pas* la session en cours : au redémarrage il
+  la reprend (via `/share/tbm/state.json`).
+- Une fois par heure, `run.sh` **gzippe** les `.ndjson` des sessions closes
+  (celles qui ont un `DONE`) et **supprime** les sessions marquées `PROCESSED`
+  de plus de `keep_days` jours (garde-fou : purge dure au-delà de
+  `2 × keep_days` même sans `PROCESSED`).
 
 ## Récupérer et analyser l'archive
 
 Depuis le PC, add-on **Samba share** activé :
 
 ```
-\\homeassistant\share\tbm\2026-09-09\vehicles-2026-09-09.ndjson.gz
+\\homeassistant\share\tbm\session-20260909T0412\vehicles.ndjson.gz
 ```
 
-Copier le `.gz` du jour sur le PC et l'analyser avec DuckDB / pandas — voir
-[`../README.md`](../README.md) pour les requêtes types (vitesse par ligne/heure,
-temps d'arrêt, trajectoires) et la note sur le croisement avec le GTFS statique.
+Copier le dossier de session sur le PC et l'analyser avec DuckDB / pandas —
+voir [`../README.md`](../README.md) pour les requêtes types (vitesse par
+ligne/heure, temps d'arrêt, trajectoires) et les sources de référence
+(GTFS statique, jours fériés, vacances scolaires).
 
 ## Empreinte sur le Pi
 
 - CPU/RAM : négligeable (1 requête HTTP / 20 s, décodage protobuf, append).
-- Carte SD : ~100–300 Mo/jour non compressé, ~10–30 Mo/jour après gzip. Avec
-  `keep_days: 14` l'archive plafonne à quelques centaines de Mo. Pour de
-  longues campagnes, viser `keep_days` bas et rapatrier les `.gz` régulièrement,
+- Carte SD : ~150–300 Mo/session non compressé, ~15–35 Mo/session après gzip
+  (positions + trips + alerts). Avec `keep_days: 14` l'archive brute plafonne
+  à ~0,5 Go. Pour de longues campagnes, rapatrier les sessions régulièrement
   ou pointer `/share` vers un disque USB.

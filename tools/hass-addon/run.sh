@@ -6,6 +6,8 @@ REPO="/opt/tbm"
 INTERVAL="$(bashio::config 'interval')"
 KEEP="$(bashio::config 'keep_days')"
 REF="$(bashio::config 'git_ref')"
+CUT="$(bashio::config 'session_cut')"
+GAP="$(bashio::config 'session_gap_min')"
 
 FLAGS=""
 if bashio::config.true 'trips'; then FLAGS="${FLAGS} --trips"; fi
@@ -24,18 +26,29 @@ fi
 cd "${REPO}"
 npm install --omit=dev --no-audit --no-fund
 
-# --- menage : gzip des jours termines, purge au-dela de keep_days --------
+# --- menage horaire ----------------------------------------------------
+#  - gzip les .ndjson d'une session close (dossier avec un fichier DONE) et
+#    des vieux dossiers dates (format pre-v1.2) ; la session ouverte n'a pas
+#    de DONE et reste donc en clair
+#  - purge une session traitee (PROCESSED) au-dela de keep_days jours
+#  - purge dur au-dela de 2x keep_days meme sans PROCESSED (garde-fou)
 housekeep() {
-    local today
-    today="$(date +%F)"
-    for d in "${OUT}"/20*/ ; do
-        [ -d "${d}" ] || continue
-        [ "$(basename "${d}")" = "${today}" ] && continue
-        find "${d}" -name '*.ndjson' -exec gzip -f {} + 2>/dev/null || true
+    for d in "${OUT}"/session-*/ ; do
+        if [ -f "${d}DONE" ]; then
+            find "${d}" -name '*.ndjson' -exec gzip -f {} + 2>/dev/null || true
+        fi
+    done
+    for d in "${OUT}"/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ ; do
+        if [ -d "${d}" ]; then
+            find "${d}" -name '*.ndjson' -exec gzip -f {} + 2>/dev/null || true
+        fi
     done
     if [ "${KEEP:-0}" -gt 0 ]; then
-        find "${OUT}" -maxdepth 1 -type d -name '20*' -mtime "+${KEEP}" \
-            -exec rm -rf {} + 2>/dev/null || true
+        find "${OUT}" -maxdepth 1 -type d -name 'session-*' -mtime "+${KEEP}" | while read -r d; do
+            if [ -f "${d}/PROCESSED" ]; then rm -rf "${d}"; fi
+        done
+        find "${OUT}" -maxdepth 1 -type d \( -name 'session-*' -o -name '20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]' \) \
+            -mtime "+$(( KEEP * 2 ))" -exec rm -rf {} + 2>/dev/null || true
     fi
 }
 
@@ -43,6 +56,7 @@ housekeep
 ( while sleep 3600; do housekeep; done ) &
 
 # exec -> node devient le process principal, donc le SIGTERM d'un "stop"
-# add-on lui parvient directement et il s'arrete proprement (flush + meta).
-bashio::log.info "Demarrage : record-feed --interval ${INTERVAL}${FLAGS} --out ${OUT}"
-exec node tools/record-feed.mjs --interval "${INTERVAL}" ${FLAGS} --out "${OUT}"
+# add-on lui parvient directement et il s'arrete proprement (flush + etat).
+bashio::log.info "Demarrage : record-feed --interval ${INTERVAL}${FLAGS} --session-cut ${CUT} --session-gap-min ${GAP} --out ${OUT}"
+exec node tools/record-feed.mjs --interval "${INTERVAL}" ${FLAGS} \
+    --session-cut "${CUT}" --session-gap-min "${GAP}" --out "${OUT}"

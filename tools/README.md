@@ -21,20 +21,40 @@ Options :
 | `--trips` | off | enregistre en plus le flux trip-updates (retard par course) |
 | `--alerts` | off | enregistre en plus le flux perturbations (alertes) |
 | `--raw` | off | garde aussi chaque réponse véhicules brute, gzippée (`raw/HHMMSS.pb.gz`) |
+| `--session-cut <HH:MM>` | `04:00` | heure locale de coupe quotidienne d'une session |
+| `--session-gap-min <n>` | `45` | minutes sans aucun véhicule avant de clôturer une session |
 | `--once` | off | un seul relevé puis sortie (test rapide) |
 
-Sortie (rotation automatique à minuit, heure locale) :
+### Découpage par session de service
+
+La sortie n'est **pas** découpée par jour calendaire mais par **session de
+service** (voir [`lib/serviceSession.mjs`](lib/serviceSession.mjs)) : une
+session s'ouvre au 1ᵉʳ véhicule qui circule et se ferme
+
+- à `--session-cut` (heure locale, une fois par jour) — même les nuits où le
+  flux ne se vide jamais (bus de nuit du week-end), pour garder des sessions
+  comparables d'un jour à l'autre ; ou
+- après `--session-gap-min` minutes sans aucun véhicule (fin de service réelle).
 
 ```
-data/2026-09-09/
-  vehicles-2026-09-09.ndjson    une ligne par point GPS (voir champs plus bas)
-  trips-2026-09-09.ndjson       une ligne par course quand son retard bouge (--trips)
-  alerts-2026-09-09.ndjson      une ligne par alerte à son apparition / changement (--alerts)
-  raw/153201.pb.gz              --raw
-  meta.json                     infos de run + compteurs
+data/
+  state.json                    pointeur de session courante + date de dernière coupe
+  session-20260909T0412/        id = minute d'ouverture, UTC
+    vehicles.ndjson             une ligne par point GPS (voir champs plus bas)
+    trips.ndjson                une ligne par course quand son retard bouge (--trips)
+    alerts.ndjson               une ligne par alerte à son apparition / changement (--alerts)
+    raw/153201.pb.gz            --raw
+    meta.json                   infos + compteurs (+ end / closed_by une fois fermée)
+    DONE                        écrit à la fermeture — c'est le déclencheur de l'analyse
 ```
 
-`data/` est dans `.gitignore` (gros volume, ~100-300 Mo/jour non compressé).
+Arrêter le recorder **ne ferme pas** la session en cours (c'est toujours le
+même jour d'exploitation) : au redémarrage il reprend la session pointée par
+`state.json`. Le 1ᵉʳ relevé de chaque session réécrit un instantané complet
+(véhicules, retards, alertes) puis seulement les deltas — chaque fichier de
+session est autonome.
+
+`data/` est dans `.gitignore` (gros volume, ~150-300 Mo/session non compressé).
 
 ### Faire tourner en fond toute la journée
 
@@ -50,7 +70,7 @@ data/2026-09-09/
   ```
   (arrêt : `Get-Process node | Stop-Process`, ou vise le PID noté au lancement)
 - La reprise sur erreur est intégrée : une requête qui échoue est loggée et
-  le poller continue. Après minuit il écrit dans un nouveau dossier daté.
+  le poller continue ; un redémarrage reprend la session en cours.
 
 ### Champs d'une ligne `vehicles-*.ndjson`
 
@@ -108,21 +128,24 @@ chaque changement de son contenu.
 
 ## Analyser après coup
 
-Compresser la journée terminée (DuckDB et pandas lisent le `.gz` directement) :
+> À terme, ce travail est automatisé par l'add-on analyzer (voir le plan). En
+> attendant, requêtes manuelles sur une session close :
+
+Compresser une session terminée (DuckDB et pandas lisent le `.gz` directement) :
 
 ```bash
-gzip data/2026-09-09/*.ndjson
+gzip data/session-20260909T0412/*.ndjson
 ```
 
 ### DuckDB
 
 ```sql
--- vitesse moyenne par ligne et par heure
+-- vitesse moyenne par ligne et par heure, sur toutes les sessions
 SELECT route,
        date_trunc('hour', ft::timestamp) AS h,
        round(avg(spd) * 3.6, 1)          AS kmh_moyen,
        count(*)                          AS points
-FROM 'data/2026-09-09/vehicles-2026-09-09.ndjson.gz'
+FROM read_ndjson_auto('data/session-*/vehicles.ndjson*', union_by_name=true)
 WHERE spd IS NOT NULL
 GROUP BY 1, 2
 ORDER BY 1, 2;
@@ -130,18 +153,22 @@ ORDER BY 1, 2;
 -- temps d'arrêt : durées passées en statut "à l'arrêt" (st = 1)
 SELECT id, stop, min(ft) AS arrivee, max(ft) AS depart,
        age(max(ft::timestamp), min(ft::timestamp)) AS duree
-FROM 'data/2026-09-09/vehicles-2026-09-09.ndjson.gz'
+FROM read_ndjson_auto('data/session-20260909T0412/vehicles.ndjson.gz')
 WHERE st = 1
 GROUP BY id, stop
 HAVING duree > INTERVAL '20 seconds'
 ORDER BY duree DESC;
 ```
 
+Note : le 1ᵉʳ relevé d'une session réécrit un instantané complet, donc des
+lignes `(id, ft)` identiques peuvent se répéter — dédupliquer au besoin
+(`SELECT DISTINCT ON (id, ft) ...` ou `GROUP BY id, ft`).
+
 ### pandas
 
 ```python
 import pandas as pd
-df = pd.read_json("data/2026-09-09/vehicles-2026-09-09.ndjson.gz", lines=True)
+df = pd.read_json("data/session-20260909T0412/vehicles.ndjson.gz", lines=True)
 df["ft"] = pd.to_datetime(df["ft"])
 df["kmh"] = df["spd"] * 3.6
 
