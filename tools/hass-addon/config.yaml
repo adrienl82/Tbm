@@ -1,8 +1,8 @@
 name: "TBM Feed Recorder"
-version: "1.2.1"
+version: "1.2.2"
 slug: "tbm_recorder"
 description: "Archive le flux GTFS-RT (positions vehicules TBM) sur /share pour analyse offline"
-url: "https://github.com/adrienl82/Tbm/tree/main/tools/hass-addon"
+url: "https://github.com/adrienl82/Tbm/tree/HEAD/tools/hass-addon"
 arch:
   - aarch64
   - armv7
