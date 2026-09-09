@@ -396,6 +396,13 @@ let followedVehicleId = null;
 // double-tap detection in syncVehicleMarkers.
 const lastVehicleTapAt = new Map();
 const DOUBLE_TAP_MS = 400;
+// Which GTFS direction_ids the single-line map is showing (the "Sens 1" /
+// "Sens 2" checkboxes). Reset to both on openLineMap.
+let mapDirections = new Set([0, 1]);
+// The last refresh's vehicles for the open line (already filtered to the
+// line, before the direction filter) -- so toggling a direction checkbox
+// re-renders without another fetch.
+let lastLineVehicles = [];
 // The line's own trusted route shape (see openLineMap), as one or more
 // [lat, lon] arrays -- animateVehicles() makes estimated positions follow
 // this rather than cut across in a straight line. Empty when no route
@@ -622,10 +629,54 @@ function setStatsHeader(first, second) {
   if (cells[1]) cells[1].textContent = second;
 }
 
+// A single-line-map vehicle passes the "Sens 1 / Sens 2" checkboxes if its
+// direction is ticked -- vehicles with no direction_id are always shown.
+function directionShown(vehicle) {
+  return vehicle.directionId === null || mapDirections.has(vehicle.directionId);
+}
+
+// Names the two direction checkboxes after each direction's headsign (from
+// the live feed), using the full line's vehicles so a hidden direction still
+// gets its label.
+function updateDirectionLabels(allLineVehicles) {
+  for (const summary of summarizeByDirection(allLineVehicles)) {
+    if (summary.directionId !== 0 && summary.directionId !== 1) continue;
+    const el = document.getElementById(`dir-${summary.directionId}-label`);
+    if (el && summary.label) el.textContent = `Vers ${summary.label}`;
+  }
+}
+
+// Shows both direction checkboxes ticked and generically labelled (a real
+// headsign lands once vehicle data arrives) for a single-line map; hides the
+// whole row for the fleet map, where "direction" spans several lines.
+function resetDirectionFilter(show) {
+  mapDirections = new Set([0, 1]);
+  lastLineVehicles = [];
+  document.getElementById("dir-0").checked = true;
+  document.getElementById("dir-1").checked = true;
+  document.getElementById("dir-0-label").textContent = "Sens 1";
+  document.getElementById("dir-1-label").textContent = "Sens 2";
+  document.getElementById("direction-filters").hidden = !show;
+}
+
+// Re-renders the open line's markers/recap from the last fetch when a
+// direction checkbox is toggled -- no refetch.
+function reapplyDirectionFilter() {
+  if (!currentLinePassage) return;
+  const shown = lastLineVehicles.filter(directionShown);
+  const stalledCount = syncVehicleMarkers(shown);
+  updateVehicleStats(shown, currentLinePassage, lastLineVehicles);
+  updateLineIncidentStatus(stalledCount);
+}
+
 // Small per-line, per-direction recap shown below the map as a table: one
 // row per direction (see summarizeByDirection), so "2 vers X, 4 vers Y"
-// reads at a glance instead of just a single total.
-function updateVehicleStats(vehicles, passage) {
+// reads at a glance instead of just a single total. `allLineVehicles`, when
+// given, is the line's full set (before the direction filter) and is used
+// only to label the direction checkboxes.
+function updateVehicleStats(vehicles, passage, allLineVehicles = vehicles) {
+  updateDirectionLabels(allLineVehicles);
+
   const table = document.getElementById("vehicle-stats");
   const body = document.getElementById("vehicle-stats-body");
   body.innerHTML = "";
@@ -1033,8 +1084,10 @@ async function refreshVehicles() {
       const filtered = vehicles.filter((vehicle) =>
         isNearAnyPoint([vehicle.latitude, vehicle.longitude], currentStopPoints, VEHICLE_STOP_DISTANCE_METERS),
       );
-      const stalledCount = syncVehicleMarkers(filtered);
-      updateVehicleStats(filtered, passage);
+      lastLineVehicles = filtered;
+      const shown = filtered.filter(directionShown);
+      const stalledCount = syncVehicleMarkers(shown);
+      updateVehicleStats(shown, passage, filtered);
       updateLineIncidentStatus(stalledCount);
       renderOpenDetailTabs();
     } catch (err) {
@@ -1157,6 +1210,7 @@ async function openLineMap(passage) {
   document.getElementById("line-incident").hidden = true;
   document.getElementById("vehicle-stats").hidden = true;
   resetMapTabs();
+  resetDirectionFilter(true);
   // The line list opens the map straight from search; a passage badge opens
   // it from the board. "Retour" should go back to whichever that was.
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
@@ -1307,6 +1361,7 @@ async function openFleetMap(mode) {
   document.getElementById("line-incident").hidden = true;
   document.getElementById("vehicle-stats").hidden = true;
   resetMapTabs();
+  resetDirectionFilter(false); // fleet map: "direction" isn't one thing across lines
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
   showScreen("map");
   const map = ensureLineMap();
@@ -1445,6 +1500,19 @@ document.getElementById("back-from-map").addEventListener("click", () => {
 });
 
 document.getElementById("tab-vehicles").addEventListener("click", () => selectTab(null));
+
+for (const id of ["dir-0", "dir-1"]) {
+  document.getElementById(id).addEventListener("change", (event) => {
+    const d0 = document.getElementById("dir-0").checked;
+    const d1 = document.getElementById("dir-1").checked;
+    if (!d0 && !d1) {
+      event.target.checked = true; // keep at least one direction visible
+      return;
+    }
+    mapDirections = new Set([...(d0 ? [0] : []), ...(d1 ? [1] : [])]);
+    reapplyDirectionFilter();
+  });
+}
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
   showScreen("favorites");
