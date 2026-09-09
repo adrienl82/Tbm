@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import protobuf from "protobufjs";
 
 import {
   activeRouteIds,
+  decodeFeedMessage,
   parseVehiclePositions,
   parseVehiclePositionsForRoutes,
   summarizeByDirection,
@@ -230,4 +232,51 @@ test("parseVehiclePositionsForRoutes drops vehicles with no route id, a route id
 test("parseVehiclePositionsForRoutes handles an empty or missing entity list", () => {
   assert.deepEqual(parseVehiclePositionsForRoutes({}, new Set(["59"])), []);
   assert.deepEqual(parseVehiclePositionsForRoutes(decodedWith([]), new Set(["59"])), []);
+});
+
+// decodeFeedMessage is the shared entry point for raw GTFS-RT bytes -- the
+// browser feeds it the CDN `protobuf` global, tools/record-feed.mjs feeds it
+// the npm package. Encode a message with the same schema, round-trip it, and
+// check the parse functions accept the result unchanged.
+test("decodeFeedMessage turns raw GTFS-RT bytes into the object the parse functions expect", () => {
+  const proto = protobuf.parse(`
+    syntax = "proto2";
+    package transit_realtime;
+    message FeedMessage { repeated FeedEntity entity = 2; }
+    message FeedEntity { optional VehiclePosition vehicle = 4; }
+    message TripDescriptor { optional string trip_id = 1; optional string route_id = 5; optional uint32 direction_id = 6; }
+    message VehicleDescriptor { optional string id = 1; optional string label = 2; }
+    message Position { required float latitude = 1; required float longitude = 2; optional float speed = 5; }
+    message VehiclePosition {
+      optional TripDescriptor trip = 1;
+      optional VehicleDescriptor vehicle = 8;
+      optional Position position = 2;
+      optional uint32 current_status = 4;
+      optional string stop_id = 7;
+      optional uint64 timestamp = 5;
+    }
+  `).root.lookupType("transit_realtime.FeedMessage");
+
+  const bytes = proto.encode({
+    entity: [
+      {
+        vehicle: {
+          trip: { tripId: "T1", routeId: "59", directionId: 1 },
+          vehicle: { id: "bus-1", label: "GARE" },
+          position: { latitude: 44.84, longitude: -0.57, speed: 8 },
+          currentStatus: 1,
+          stopId: "4970",
+          timestamp: 1_700_000_000,
+        },
+      },
+    ],
+  }).finish();
+
+  const decoded = decodeFeedMessage(new Uint8Array(bytes), protobuf);
+  const [vehicle] = parseVehiclePositions(decoded, "59");
+  assert.equal(vehicle.id, "bus-1");
+  assert.equal(vehicle.routeId, "59");
+  assert.equal(vehicle.speedKmh, 29); // 8 m/s -> 28.8 -> rounded
+  assert.equal(vehicle.moving, false); // STOPPED_AT
+  assert.deepEqual(vehicle.timestamp, new Date(1_700_000_000 * 1000));
 });

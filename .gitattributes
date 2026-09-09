@@ -1,0 +1,7 @@
+# Scripts et sources : toujours en LF, meme sur une machine Windows -- le
+# add-on Home Assistant execute run.sh sous Linux et un CRLF casserait le
+# shebang.
+*.sh   text eol=lf
+*.mjs  text eol=lf
+*.js   text eol=lf
+Dockerfile text eol=lf

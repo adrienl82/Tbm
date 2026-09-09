@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .DS_Store
+
+# Flux GTFS-RT archive en local par tools/record-feed.mjs
+data/

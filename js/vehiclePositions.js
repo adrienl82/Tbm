@@ -11,7 +11,7 @@
 import { isValidCoordinate } from "./geoBounds.js";
 import { lineNumericId } from "./lineShapes.js";
 
-const FEED_URL =
+export const FEED_URL =
   "https://bdx.mecatran.com/utw/ws/gtfsfeed/vehicles/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt";
 
 const GTFS_REALTIME_PROTO = `
@@ -67,6 +67,19 @@ function getFeedMessageType(pbLib) {
     feedMessageType = pbLib.parse(GTFS_REALTIME_PROTO).root.lookupType("transit_realtime.FeedMessage");
   }
   return feedMessageType;
+}
+
+// Decodes raw GTFS-RT feed bytes into the plain object form of a FeedMessage
+// (the `decoded` argument the parse* functions below expect). pbLib is a
+// protobufjs instance -- the CDN global `protobuf` in the browser, the
+// `protobufjs` npm package in Node (see tools/record-feed.mjs, which records
+// the feed to disk over a full day for offline analysis).
+export function decodeFeedMessage(bytes, pbLib) {
+  const FeedMessage = getFeedMessageType(pbLib);
+  // longs: Number -- the timestamp (Unix seconds) is well within safe
+  // integer range, and a plain number is simpler to work with than the
+  // Long objects protobufjs otherwise produces for uint64 fields.
+  return FeedMessage.toObject(FeedMessage.decode(bytes), { defaults: true, longs: Number });
 }
 
 // GTFS-RT's VehicleStopStatus enum (see the embedded schema above): a
@@ -202,12 +215,7 @@ async function fetchDecodedFeed({ fetchImpl = null, protobufImpl = null } = {}) 
     throw new Error(`HTTP ${response.status} en recuperant les positions des vehicules`);
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
-
-  const FeedMessage = getFeedMessageType(pbLib);
-  // longs: Number -- the timestamp (Unix seconds) is well within safe
-  // integer range, and a plain number is simpler to work with than the
-  // Long objects protobufjs otherwise produces for uint64 fields.
-  return FeedMessage.toObject(FeedMessage.decode(bytes), { defaults: true, longs: Number });
+  return decodeFeedMessage(bytes, pbLib);
 }
 
 export async function fetchVehiclePositions(lineRef, options = {}) {
