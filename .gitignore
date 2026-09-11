@@ -1,6 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+__pycache__/
+*.pyc
 
 # Reglages locaux de l'agent (permissions Bash auto-enregistrees, etc.)
 .claude/
