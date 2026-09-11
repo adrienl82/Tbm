@@ -97,7 +97,8 @@ véhicule ne bouge pas entre deux relevés.
 
 Flux GTFS-RT trip-updates : la prédiction temps réel de chaque course en
 service. Une ligne est écrite à la 1ʳᵉ observation d'une course, puis à chaque
-fois que son retard (`delay_sec`) bouge d'au moins 30 s.
+fois qu'elle passe à un nouveau prochain arrêt, ou que le retard prévu à cet
+arrêt (`next_delay_sec`) bouge d'au moins 30 s.
 
 | clé | sens |
 |---|---|
@@ -106,11 +107,18 @@ fois que son retard (`delay_sec`) bouge d'au moins 30 s.
 | `route` | id numérique de ligne |
 | `dir` | sens `0` / `1` (`null` si absent) |
 | `start_date` | date de service de la course (`YYYYMMDD`) |
-| `delay_sec` | retard courant de la course en secondes (négatif = en avance) |
+| `delay_sec` | retard **de la course entière** — champ du flux quasi toujours à `0` chez TBM, gardé par complétude mais peu exploitable |
 | `next_stop` | id du prochain arrêt (celui dont l'heure prévue est encore à venir) |
 | `next_stop_seq` | rang de ce prochain arrêt dans la course |
 | `next_time` | heure d'arrivée prévue à ce prochain arrêt (ISO 8601 UTC) |
+| `next_delay_sec` | retard prévu **à cet arrêt précis**, en secondes (négatif = en avance) — c'est le champ qui varie réellement, à utiliser pour la ponctualité |
 | `sched_rel` | relation à l'horaire : `0` prévu, `1` supprimé, `2` ajouté, `3` course annulée |
+
+⚠️ Avant le 2026-09-11, le dédoublonnage se basait sur `delay_sec` (toujours à
+`0`) : chaque course n'apparaît donc qu'**une seule fois** dans les sessions
+antérieures à cette date, pas de suivi dans le temps. Le champ
+`next_delay_sec` n'existait pas non plus. Les sessions capturées depuis
+suivent bien la progression de chaque course arrêt par arrêt.
 
 ### Champs d'une ligne `alerts-*.ndjson` (`--alerts`)
 

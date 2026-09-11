@@ -63,9 +63,11 @@ const ALERTS_FEED_URL =
 const TRIPS_FEED_URL =
   "https://bdx.mecatran.com/utw/ws/gtfsfeed/realtime/bordeaux?apiKey=opendata-bordeaux-metropole-flux-gtfs-rt";
 
-// A trip-update row is re-emitted only when the trip's delay moves by at
-// least this many seconds since the last one written for it (same
-// change-only principle as the vehicle-fix dedup below).
+// A trip-update row is re-emitted when its imminent stop's own predicted
+// delay moves by at least this many seconds since the last one written for
+// it (same change-only principle as the vehicle-fix dedup below). TBM's
+// trip-level delay field is not useful for this -- it reports ~0 for every
+// trip regardless of how late it actually runs.
 const TRIP_DELAY_EPSILON_SEC = 30;
 
 // --- CLI args -------------------------------------------------------------
@@ -153,7 +155,13 @@ function saveState() {
 
 const writers = { id: null, dir: null, startedAt: null, vehicles: null, trips: null, alerts: null };
 
-function openSession(id, startedAtISO) {
+// resume: true when this (re)opens a session that was already running before
+// a restart (see resumeOrStart), as opposed to a genuinely new one starting.
+// Counters then pick up from the session's last flushed meta.json instead of
+// resetting to zero -- otherwise a mid-session restart made the final
+// meta.json under-report the true session totals (only the post-restart
+// segment), even though the ndjson files themselves were never missing data.
+function openSession(id, startedAtISO, { resume = false } = {}) {
   const dir = path.join(opts.out, `session-${id}`);
   fs.mkdirSync(dir, { recursive: true });
   if (opts.raw) fs.mkdirSync(path.join(dir, "raw"), { recursive: true });
@@ -166,9 +174,23 @@ function openSession(id, startedAtISO) {
   // Each session file is self-contained: drop the in-memory dedup so the
   // first poll of the session writes a full snapshot, then deltas.
   lastFixTs.clear();
-  lastTripDelay.clear();
+  lastTripState.clear();
   lastAlertHash.clear();
-  sessionCounters = { polls: 0, vehicleRows: 0, tripRows: 0, alertRows: 0 };
+  sessionCounters = resume ? readPriorCounters(dir) : { polls: 0, vehicleRows: 0, tripRows: 0, alertRows: 0 };
+}
+
+function readPriorCounters(dir) {
+  try {
+    const prior = JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8"));
+    return {
+      polls: prior.polls ?? 0,
+      vehicleRows: prior.vehicleRowsWritten ?? 0,
+      tripRows: prior.tripRowsWritten ?? 0,
+      alertRows: prior.alertRowsWritten ?? 0,
+    };
+  } catch {
+    return { polls: 0, vehicleRows: 0, tripRows: 0, alertRows: 0 }; // no meta.json yet -- nothing to recover
+  }
 }
 
 function endStreams() {
@@ -200,8 +222,9 @@ function closeSession(reason, endedAtISO) {
 // Bounded memory (~one entry per active vehicle). Cleared at each session
 // open (see openSession). Vehicles with no timestamp are always emitted.
 const lastFixTs = new Map();
-// trip_id -> last delay (s) written; alert_id -> hash of last state written.
-const lastTripDelay = new Map();
+// trip_id -> { stop, delay } last written (see tripRows); alert_id -> hash of
+// last state written.
+const lastTripState = new Map();
 const lastAlertHash = new Map();
 
 const counters = {
@@ -298,9 +321,13 @@ function vehicleRows(decoded, recordedAt) {
   return rows;
 }
 
-// One row per trip whose delay has moved by >= TRIP_DELAY_EPSILON_SEC since
-// the last row written for it (or that we've never seen). `next` is the first
-// stop_time_update still in the future -- the trip's imminent prediction.
+// One row per trip whenever its imminent stop changes (it passed the
+// previous one) or that stop's own predicted delay moves by
+// >= TRIP_DELAY_EPSILON_SEC. `next` is the first stop_time_update still in
+// the future -- the trip's imminent prediction; next_delay_sec is its own
+// arrival/departure delay, which is what actually varies (unlike the
+// trip-level `delay` field, kept below as delay_sec for completeness but
+// observed to sit at 0 for essentially every TBM trip).
 function tripRows(decoded, recordedAt) {
   const nowSec = Date.parse(recordedAt) / 1000;
   const rows = [];
@@ -309,20 +336,23 @@ function tripRows(decoded, recordedAt) {
     const tripId = tu?.trip?.tripId;
     if (!tu || !tripId) continue;
 
-    const delay = typeof tu.delay === "number" ? tu.delay : null;
-    if (delay !== null) {
-      const last = lastTripDelay.get(tripId);
-      if (last !== undefined && Math.abs(delay - last) < TRIP_DELAY_EPSILON_SEC) continue;
-      lastTripDelay.set(tripId, delay);
-    } else if (lastTripDelay.has(tripId)) {
-      continue; // no delay now, already have a row for this trip
-    } else {
-      lastTripDelay.set(tripId, 0);
-    }
-
     const stus = tu.stopTimeUpdate ?? tu.stop_time_update ?? [];
     const next =
       stus.find((s) => (s.arrival?.time ?? s.departure?.time ?? 0) >= nowSec) ?? stus[stus.length - 1] ?? null;
+    const nextStopId = next?.stopId || null;
+    const nextDelay =
+      typeof next?.arrival?.delay === "number"
+        ? next.arrival.delay
+        : typeof next?.departure?.delay === "number"
+          ? next.departure.delay
+          : null;
+
+    const last = lastTripState.get(tripId);
+    const stopChanged = !last || last.stop !== nextStopId;
+    const delayChanged = nextDelay !== null && (last?.delay == null || Math.abs(nextDelay - last.delay) >= TRIP_DELAY_EPSILON_SEC);
+    if (!stopChanged && !delayChanged) continue;
+    lastTripState.set(tripId, { stop: nextStopId, delay: nextDelay });
+
     const nextTime = next ? (next.arrival?.time ?? next.departure?.time ?? null) : null;
 
     rows.push({
@@ -331,10 +361,11 @@ function tripRows(decoded, recordedAt) {
       route: tu.trip.routeId != null ? String(tu.trip.routeId) : null,
       dir: typeof tu.trip.directionId === "number" ? tu.trip.directionId : null,
       start_date: tu.trip.startDate ?? null,
-      delay_sec: delay,
-      next_stop: next?.stopId || null,
+      delay_sec: typeof tu.delay === "number" ? tu.delay : null, // trip-level; usually 0, see above
+      next_stop: nextStopId,
       next_stop_seq: typeof next?.stopSequence === "number" ? next.stopSequence : null,
       next_time: nextTime ? new Date(nextTime * 1000).toISOString() : null,
+      next_delay_sec: nextDelay,
       sched_rel: typeof tu.trip.scheduleRelationship === "number" ? tu.trip.scheduleRelationship : null,
     });
   }
@@ -522,7 +553,7 @@ function resumeOrStart() {
   loadState();
   if (sessionState.session) {
     const { id, startedAt } = sessionState.session;
-    openSession(id, startedAt);
+    openSession(id, startedAt, { resume: true });
     console.error(`[${new Date().toISOString()}] reprise de la session ${id}`);
   }
 }
