@@ -9,9 +9,16 @@ import html
 import json
 from pathlib import Path
 
-from svgchart import line_chart
+from svgchart import BUCKET_LABEL_FR, line_chart, stacked_bar_chart
 
 WEEKDAY_FR = {1: "Lundi", 2: "Mardi", 3: "Mercredi", 4: "Jeudi", 5: "Vendredi", 6: "Samedi", 7: "Dimanche"}
+
+# Same official TBM tram colors as js/app.js's TRAM_LINE_COLORS, keyed by
+# letter (rollups.TRAM_ROUTE_LETTER already relabels routes to A-F).
+TRAM_PALETTE = {
+    "A": "#802991", "B": "#EE154A", "C": "#D34F98",
+    "D": "#8B64A5", "E": "#80684C", "F": "#E8822F",
+}
 
 
 def _esc(value) -> str:
@@ -86,11 +93,81 @@ def build_index_html(*, hourly: list[dict], sessions: list[dict], comparisons: d
 <html lang="fr"><head><meta charset="utf-8"/><title>TBM -- tableau de bord trafic</title>
 <style>{_CSS}</style></head>
 <body>
-<header><h1>TBM -- trafic observe</h1><p class="muted">Genere le {_esc(generated_at)} -- <a href="map.html">carte du trafic &rarr;</a></p></header>
+<header><h1>TBM -- trafic observe</h1><p class="muted">Genere le {_esc(generated_at)} -- <a href="map.html">carte du trafic &rarr;</a> -- <a href="punctuality.html">ponctualite &rarr;</a></p></header>
 <main>
   {chart}
   <section><h2>Comparaisons</h2>{compare_html or "<p class='muted'>Pas encore assez de sessions.</p>"}</section>
   <section><h2>Sessions traitees ({len(sessions)})</h2>{_sessions_table(sessions)}</section>
+</main>
+</body></html>"""
+
+
+def _punctuality_line_table(rows: list[dict]) -> str:
+    if not rows:
+        return "<p class='muted'>Pas encore de donnees de ponctualite (necessite des sessions enregistrees depuis le 2026-09-11).</p>"
+    trs = "".join(f"""
+      <tr>
+        <td>{"Tram " if r["is_tram"] else "Bus "}{_esc(r["label"])}</td>
+        <td>{r["n"]}</td>
+        <td>{r["pct_ontime"]}%</td>
+        <td>{r["avg_delay_min"]}</td>
+        <td>{r["median_delay_min"]}</td>
+      </tr>""" for r in rows)
+    return f"""
+      <table class="sessions">
+        <thead><tr><th>Ligne</th><th>Observations</th><th>A l'heure</th>
+          <th>Retard moyen (min)</th><th>Retard median (min)</th></tr></thead>
+        <tbody>{trs}</tbody>
+      </table>"""
+
+
+def build_punctuality_html(
+    *, overview: dict, by_line: list[dict], by_hour: list[dict],
+    by_stop_seq: list[dict], generated_at: str,
+) -> str:
+    bucket_chart = stacked_bar_chart(overview["buckets"], title="Repartition globale")
+    hour_series = {"retard": [(r["hour"], 100 - r["pct_ontime"]) for r in by_hour]}
+    hour_chart = line_chart(hour_series, y_suffix="%", title="Part de courses en retard, par heure")
+
+    by_line_tram = _punctuality_line_table([r for r in by_line if r["is_tram"]])
+    by_line_bus = _punctuality_line_table([r for r in by_line if not r["is_tram"]])
+
+    seq_series: dict[str, list[tuple[float, float]]] = {}
+    for r in by_stop_seq:
+        seq_series.setdefault(r["label"], []).append((r["stop_seq"], r["avg_delay_min"]))
+    seq_chart = (
+        line_chart(seq_series, y_suffix=" min", title="Retard moyen par position d'arret", palette=TRAM_PALETTE)
+        if seq_series
+        else "<p class='chart-empty'>Accumulation du retard par arret : pas encore de donnees.</p>"
+    )
+
+    overview_line = (
+        f"{overview['n_observations']} releves sur {overview['n_days']} jour(s) -- "
+        f"retard moyen {overview['avg_delay_min']} min (median {overview['median_delay_min']} min)."
+        if overview["n_observations"]
+        else "Pas encore de releves de ponctualite."
+    )
+
+    return f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"/><title>TBM -- ponctualite</title>
+<style>{_CSS}</style></head>
+<body>
+<header><h1>TBM -- ponctualite</h1>
+<p class="muted">Genere le {_esc(generated_at)} -- <a href="index.html">&larr; tableau de bord</a> -- <a href="map.html">carte du trafic &rarr;</a></p>
+<p class="muted small">Retard mesure au prochain arret prevu par le flux temps reel de TBM (pas reconstruit depuis
+l'horaire papier). Le 1er arret de chaque course et les valeurs aberrantes (&gt;30min, glitches du flux) sont
+exclus pour ne pas fausser les moyennes.</p>
+</header>
+<main>
+  <section><h2>Vue d'ensemble</h2><p>{overview_line}</p>{bucket_chart}</section>
+  <section><h2>Par heure de la journee</h2>{hour_chart}</section>
+  <section><h2>Par ligne -- trams</h2>{by_line_tram}</section>
+  <section><h2>Par ligne -- bus (20 releves minimum)</h2>{by_line_bus}</section>
+  <section><h2>Accumulation du retard le long du trajet (trams)</h2>
+    <p class="muted small">Retard moyen (min) selon la position de l'arret dans la course -- montre si le retard
+    se creuse progressivement ou apparait d'un coup a un point precis.</p>
+    {seq_chart}
+  </section>
 </main>
 </body></html>"""
 
@@ -148,7 +225,7 @@ def build_map_html(grid_rows: list[list], generated_at: str) -> str:
 <div id="map"></div>
 <div id="panel">
   <h1>Trafic observe par heure</h1>
-  <p class="muted" style="font-size:11px;margin:0">Genere le {_esc(generated_at)} -- <a href="index.html">&larr; tableau de bord</a></p>
+  <p class="muted" style="font-size:11px;margin:0">Genere le {_esc(generated_at)} -- <a href="index.html">&larr; tableau de bord</a> -- <a href="punctuality.html">ponctualite &rarr;</a></p>
   <label>Mode
     <select id="mode-select">
       <option value="tram">Tram</option>
@@ -212,10 +289,21 @@ render();
 </body></html>"""
 
 
-def write_dashboard(dashboard_dir: Path, *, hourly, sessions, comparisons, grid_rows, generated_at: str) -> None:
+def write_dashboard(
+    dashboard_dir: Path, *, hourly, sessions, comparisons, grid_rows,
+    punctuality_overview, punctuality_by_line, punctuality_by_hour, punctuality_by_stop_seq,
+    generated_at: str,
+) -> None:
     dashboard_dir.mkdir(parents=True, exist_ok=True)
     (dashboard_dir / "index.html").write_text(
         build_index_html(hourly=hourly, sessions=sessions, comparisons=comparisons, generated_at=generated_at),
         encoding="utf-8",
     )
     (dashboard_dir / "map.html").write_text(build_map_html(grid_rows, generated_at), encoding="utf-8")
+    (dashboard_dir / "punctuality.html").write_text(
+        build_punctuality_html(
+            overview=punctuality_overview, by_line=punctuality_by_line, by_hour=punctuality_by_hour,
+            by_stop_seq=punctuality_by_stop_seq, generated_at=generated_at,
+        ),
+        encoding="utf-8",
+    )

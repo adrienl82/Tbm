@@ -60,12 +60,15 @@ def process_session(data_dir: Path, session: Session, calendars: Calendars) -> N
 
     trips_rel = metrics.trip_metrics(con)
     grid_rel = metrics.grid_metrics(con)
-    store.write_session(data_dir, session.id, trips_rel, grid_rel, summary)
+    punctuality_rel = metrics.punctuality_rows(con)
+    n_punctuality = punctuality_rel.aggregate("count(*)").fetchone()[0]
+    store.write_session(data_dir, session.id, trips_rel, grid_rel, punctuality_rel, summary)
     con.close()
 
     mark_processed(session)
     print(f"  {session.id}: {summary['n_vehicle_rows']} points, {summary['n_trips']} courses, "
-          f"{summary['n_trams']} trams, {summary['n_buses']} bus -> OK")
+          f"{summary['n_trams']} trams, {summary['n_buses']} bus, "
+          f"{n_punctuality} relevés de ponctualité -> OK")
 
 
 def rebuild_dashboard(data_dir: Path) -> None:
@@ -74,6 +77,10 @@ def rebuild_dashboard(data_dir: Path) -> None:
     sessions_rows = rollups.daily_sessions(con)
     comparisons = rollups.build_comparisons(con)
     grid_rows = rollups.grid_for_map(con)
+    punctuality_overview = rollups.punctuality_overview(con)
+    punctuality_by_line = rollups.punctuality_by_line(con)
+    punctuality_by_hour = rollups.punctuality_by_hour(con)
+    punctuality_by_stop_seq = rollups.tram_delay_by_stop_sequence(con)
     con.close()
 
     dashboard.write_dashboard(
@@ -82,6 +89,10 @@ def rebuild_dashboard(data_dir: Path) -> None:
         sessions=sessions_rows,
         comparisons=comparisons,
         grid_rows=grid_rows,
+        punctuality_overview=punctuality_overview,
+        punctuality_by_line=punctuality_by_line,
+        punctuality_by_hour=punctuality_by_hour,
+        punctuality_by_stop_seq=punctuality_by_stop_seq,
         generated_at=datetime.now().isoformat(timespec="seconds"),
     )
 

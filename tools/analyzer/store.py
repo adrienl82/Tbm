@@ -13,17 +13,23 @@ def parquet_root(data_dir: Path) -> Path:
     return data_dir / "analysis" / "parquet"
 
 
-def write_session(data_dir: Path, session_id: str, trips_rel, grid_rel, summary: dict) -> None:
+def write_session(
+    data_dir: Path, session_id: str, trips_rel, grid_rel, punctuality_rel, summary: dict
+) -> None:
     root = parquet_root(data_dir)
-    for name in ("trips", "grid", "sessions"):
+    for name in ("trips", "grid", "sessions", "punctuality"):
         (root / name).mkdir(parents=True, exist_ok=True)
 
     trips_path = root / "trips" / f"{session_id}.parquet"
     grid_path = root / "grid" / f"{session_id}.parquet"
     summary_path = root / "sessions" / f"{session_id}.parquet"
+    punctuality_path = root / "punctuality" / f"{session_id}.parquet"
 
     trips_rel.to_parquet(str(trips_path))
     grid_rel.to_parquet(str(grid_path))
+    # Empty for any session before the 2026-09-11 dedup fix (see metrics.py) --
+    # a valid zero-row parquet file, not an error.
+    punctuality_rel.to_parquet(str(punctuality_path))
 
     # A one-row table, columns/values bound positionally so duckdb infers
     # types itself (including the datetime.datetime start_ft/end_ft) --
