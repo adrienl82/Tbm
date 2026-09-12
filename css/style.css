@@ -301,6 +301,33 @@ ul {
   font-weight: 600;
 }
 
+.direction-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.direction-filters label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.direction-filters input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.direction-filters button {
+  margin-left: auto;
+  padding: 4px 8px;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
 #line-map {
   width: 100%;
   aspect-ratio: 1 / 1;

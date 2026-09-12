@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  angleBetweenBearings,
   decelerateTowardStop,
   destinationPoint,
   distanceToStopAhead,
@@ -15,6 +16,16 @@ import {
   trackStalledSince,
 } from "../js/vehicleMotion.js";
 import { distanceMeters } from "../js/geoBounds.js";
+
+test("angleBetweenBearings is 0 for identical bearings and wraps correctly near 360/0", () => {
+  assert.equal(angleBetweenBearings(90, 90), 0);
+  assert.equal(angleBetweenBearings(350, 10), 20);
+});
+
+test("angleBetweenBearings caps out at 180 for opposite bearings", () => {
+  assert.equal(angleBetweenBearings(0, 180), 180);
+  assert.equal(angleBetweenBearings(45, 225), 180);
+});
 
 test("destinationPoint at distance 0 returns (about) the same point", () => {
   const [lat, lon] = destinationPoint(44.84, -0.58, 90, 0);

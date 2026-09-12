@@ -60,6 +60,11 @@
           <h2 id="map-title"></h2>
         </header>
         <p id="map-status" class="status"></p>
+        <div id="direction-filters" class="direction-filters">
+          <label><input type="checkbox" id="direction-filter-0" checked /> <span id="direction-filter-0-label">Sens 1</span></label>
+          <label><input type="checkbox" id="direction-filter-1" checked /> <span id="direction-filter-1-label">Sens 2</span></label>
+          <button id="recenter-button" class="link" type="button" aria-label="Recentrer sur ma position" title="Recentrer sur ma position">&#8853;</button>
+        </div>
         <div id="line-map"></div>
         <table id="vehicle-stats" class="stats-table" hidden>
           <caption id="vehicle-stats-caption"></caption>

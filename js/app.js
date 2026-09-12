@@ -9,6 +9,7 @@ import {
 } from "./vehiclePositions.js";
 import { distanceMeters, isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 import {
+  angleBetweenBearings,
   bearingBetween,
   distanceToStopAhead,
   earliestStillSince,
@@ -371,6 +372,16 @@ let currentLinePassage = null;
 // given vehicle belongs to. Exactly one of currentLinePassage /
 // currentFleetContext is non-null while the map screen is open.
 let currentFleetContext = null;
+// The current line's last near-stop-filtered fetch (see refreshVehicles),
+// before the direction checkboxes below are applied -- kept around so
+// toggling a checkbox can re-render immediately from the same data instead
+// of waiting for the next real refresh.
+let currentLineVehicles = [];
+// Which of a line's two GTFS-RT directions (0/1) are checked on the map
+// screen's direction-filter row. Only meaningful in single-line mode
+// (fleet mode hides that row entirely, since mixing several lines makes a
+// single pair of checkboxes not mean the same thing for all of them).
+let directionFilterEnabled = { 0: true, 1: true };
 let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
@@ -566,6 +577,36 @@ function updateVehicleStats(vehicles, passage) {
   table.hidden = false;
 }
 
+// Refreshes the direction-filter row's two checkbox labels from whichever
+// destinations are actually running right now (see summarizeByDirection) --
+// a direction with no vehicle in the current fetch keeps whatever label it
+// last had rather than reverting to the generic "Sens 1"/"Sens 2"
+// placeholder, since it may just be between vehicles rather than genuinely
+// unused.
+function updateDirectionFilterLabels(vehicles) {
+  for (const direction of summarizeByDirection(vehicles)) {
+    if (direction.directionId !== 0 && direction.directionId !== 1) continue;
+    if (!direction.label) continue;
+    document.getElementById(`direction-filter-${direction.directionId}-label`).textContent = `Vers ${direction.label}`;
+  }
+}
+
+// Applies the direction-filter checkboxes to the line's last fetched
+// vehicles (see refreshVehicles) and re-renders the map/stats/incident
+// notice from that -- called both after a real refresh and immediately
+// when a checkbox is toggled, so unchecking a direction hides its vehicles
+// right away instead of waiting for the next fetch.
+function applyDirectionFilterAndRender() {
+  if (!currentLinePassage) return;
+  updateDirectionFilterLabels(currentLineVehicles);
+  const visible = currentLineVehicles.filter(
+    (vehicle) => vehicle.directionId === null || directionFilterEnabled[vehicle.directionId] !== false,
+  );
+  const stalledCount = syncVehicleMarkers(visible);
+  updateVehicleStats(visible, currentLinePassage);
+  updateLineIncidentStatus(stalledCount);
+}
+
 // Rebuilds the vehicle markers layer from a fresh vehicle list, matched by
 // id against the previous refresh's markers so a vehicle already on screen
 // keeps the same marker -- and so its open tooltip, follow ring and
@@ -647,9 +688,10 @@ function syncVehicleMarkers(vehicles) {
       // rather than reused from the previous entry.
       headingEl: marker.getElement()?.querySelector(".vehicle-heading") ?? null,
       // Carried forward across refreshes so animateVehicles() can tell how
-      // far (and which way) the marker actually moved since last frame,
-      // instead of resetting to "no movement yet" every refresh.
-      lastAnimatedPosition: previous?.lastAnimatedPosition ?? null,
+      // far (and which way) the dead-reckoned estimate actually moved since
+      // last frame, instead of resetting to "no movement yet" every
+      // refresh.
+      lastEstimatedPosition: previous?.lastEstimatedPosition ?? null,
       // Distance to the line's own closest stop actually ahead of this
       // vehicle at this last known fix -- animateVehicles() uses it so a
       // fast vehicle's estimated position never creeps past a stop it's
@@ -690,12 +732,10 @@ async function refreshVehicles() {
       // route_id -- it then reports a real position, just nowhere near this
       // line's own stops. Drop it rather than show it confidently in the
       // wrong place.
-      const filtered = vehicles.filter((vehicle) =>
+      currentLineVehicles = vehicles.filter((vehicle) =>
         isNearAnyPoint([vehicle.latitude, vehicle.longitude], currentStopPoints, VEHICLE_STOP_DISTANCE_METERS),
       );
-      const stalledCount = syncVehicleMarkers(filtered);
-      updateVehicleStats(filtered, passage);
-      updateLineIncidentStatus(stalledCount);
+      applyDirectionFilterAndRender();
     } catch (err) {
       console.error("Impossible de charger les positions des vehicules :", err);
     }
@@ -754,13 +794,33 @@ function animateVehicles() {
     }
     marker.setLatLng(position);
 
-    if (entry.headingEl && entry.lastAnimatedPosition) {
-      const moved = distanceMeters(entry.lastAnimatedPosition, position);
+    // Heading is derived from the dead-reckoned estimate's own progress,
+    // not from the displayed (possibly still transitioning) position: when
+    // a fresh real fix lands behind where the marker had drifted to (it
+    // overshot, or the route-following projection corrects itself), the
+    // 2s blend eases the *displayed* dot backwards for a moment -- using
+    // that for heading would flip the arrow to point the wrong way for the
+    // whole transition instead of just reflecting the vehicle's actual
+    // direction of travel.
+    if (entry.headingEl && entry.lastEstimatedPosition) {
+      const moved = distanceMeters(entry.lastEstimatedPosition, estimated);
       if (moved >= HEADING_UPDATE_MIN_METERS) {
-        entry.headingEl.style.transform = `rotate(${bearingBetween(entry.lastAnimatedPosition, position)}deg)`;
+        const frameBearing = bearingBetween(entry.lastEstimatedPosition, estimated);
+        // A fresh real fix can land behind where the previous refresh's
+        // estimate had walked to (an overshoot correcting itself), and
+        // projecting onto a route polyline through a tight curve can
+        // briefly snap to a different nearby point on it -- either one
+        // shows up as a single frame's heading swinging sharply away from
+        // the vehicle's own last reported GPS bearing. Ignoring those (and
+        // keeping whatever heading was already showing) avoids the arrow
+        // flipping to face backward for a frame instead of reflecting the
+        // vehicle's real direction of travel.
+        if (vehicle.bearing === null || angleBetweenBearings(frameBearing, vehicle.bearing) <= 100) {
+          entry.headingEl.style.transform = `rotate(${frameBearing}deg)`;
+        }
       }
     }
-    entry.lastAnimatedPosition = position;
+    entry.lastEstimatedPosition = estimated;
 
     if (vehicle.id && vehicle.id === followedVehicleId) {
       lineMap.setView(position, lineMap.getZoom(), { animate: false });
@@ -813,6 +873,13 @@ async function openLineMap(passage) {
   statusEl.textContent = "";
   document.getElementById("line-incident").hidden = true;
   document.getElementById("vehicle-stats").hidden = true;
+  document.getElementById("direction-filters").hidden = false;
+  directionFilterEnabled = { 0: true, 1: true };
+  document.getElementById("direction-filter-0").checked = true;
+  document.getElementById("direction-filter-1").checked = true;
+  document.getElementById("direction-filter-0-label").textContent = "Sens 1";
+  document.getElementById("direction-filter-1-label").textContent = "Sens 2";
+  currentLineVehicles = [];
   // The line list opens the map straight from search; a passage badge opens
   // it from the board. "Retour" should go back to whichever that was.
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
@@ -913,6 +980,11 @@ async function openFleetMap(mode) {
   statusEl.textContent = "";
   document.getElementById("line-incident").hidden = true;
   document.getElementById("vehicle-stats").hidden = true;
+  // Mixing several lines makes a single pair of direction checkboxes not
+  // mean the same thing for all of them -- the row only applies to a
+  // single open line (see openLineMap).
+  document.getElementById("direction-filters").hidden = true;
+  currentLineVehicles = [];
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
   showScreen("map");
   const map = ensureLineMap();
@@ -1043,6 +1115,17 @@ document.getElementById("back-from-favorites").addEventListener("click", goHome)
 document.getElementById("back-from-map").addEventListener("click", () => {
   closeLineMap();
   showScreen(mapReturnScreen);
+});
+
+for (const id of [0, 1]) {
+  document.getElementById(`direction-filter-${id}`).addEventListener("change", (event) => {
+    directionFilterEnabled[id] = event.target.checked;
+    applyDirectionFilterAndRender();
+  });
+}
+
+document.getElementById("recenter-button").addEventListener("click", () => {
+  if (lineMap) centerOnUserLocation(lineMap);
 });
 
 document.getElementById("go-favorites").addEventListener("click", async () => {

@@ -37,7 +37,7 @@ export function bearingBetween([lat1, lon1], [lat2, lon2]) {
 }
 
 // Smallest signed difference between two bearings, in [0, 180].
-function angleBetweenBearings(a, b) {
+export function angleBetweenBearings(a, b) {
   return Math.abs(((a - b + 540) % 360) - 180);
 }
 
