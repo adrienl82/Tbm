@@ -578,7 +578,14 @@ function ensureLineMap() {
 function renderQuartierLabels() {
   if (!lineMap || !quartierLabelsLayer) return;
   quartierLabelsLayer.clearLayers();
-  if (lineMap.getZoom() < QUARTIER_LABELS_MIN_ZOOM) return;
+  // getZoom() returns undefined (rather than throwing) on a map that's
+  // never had setView/fitBounds called on it at all -- checking that
+  // explicitly (instead of just "< QUARTIER_LABELS_MIN_ZOOM", which
+  // undefined also satisfies) avoids calling getBounds() below, which
+  // Leaflet does throw from ("Set map center and zoom first.") in that
+  // same no-view-yet state.
+  const zoom = lineMap.getZoom();
+  if (typeof zoom !== "number" || zoom < QUARTIER_LABELS_MIN_ZOOM) return;
   const bounds = lineMap.getBounds();
   for (const quartier of QUARTIERS) {
     if (!bounds.contains([quartier.lat, quartier.lon])) continue;
@@ -1526,8 +1533,6 @@ async function openLineMap(passage) {
       .bindTooltip(stop.name)
       .addTo(stopMarkersLayer);
   }
-  applyZoomScale();
-
   // Fit to whichever points are actually trustworthy: the route when it
   // checked out, otherwise the stops so the map still lands on the line.
   // fitBounds on a whole line lands quite wide; nudge in a step so it opens
@@ -1536,11 +1541,21 @@ async function openLineMap(passage) {
   // call used to fire here too, silently requesting location on every
   // single line opened (permission prompts, denials, and slow/failed fixes
   // included) for a recenter the user hadn't asked for.
+  //
+  // This must run before applyZoomScale(): on a brand new map (the very
+  // first one opened this session) nothing has ever called setView/
+  // fitBounds yet, and applyZoomScale() (via renderQuartierLabels()) calls
+  // getBounds(), which Leaflet throws on until the map has a view at all
+  // ("Set map center and zoom first."). That exception used to abort the
+  // rest of this function silently -- no route, no vehicles, no refresh
+  // loop -- on every fresh page load, recovering only once something else
+  // (the recenter button) gave the map its first view.
   const fitPoints = routeBounds.length > 0 ? routeBounds : stopPoints;
   if (fitPoints.length > 0) {
     map.fitBounds(fitPoints, { padding: [20, 20], animate: false });
     map.setZoom(Math.min(map.getMaxZoom(), map.getZoom() + LINE_FIT_ZOOM_IN), { animate: false });
   }
+  applyZoomScale();
 
   refreshVehicles();
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
