@@ -425,6 +425,11 @@ let currentLinePassage = null;
 // given vehicle belongs to. Exactly one of currentLinePassage /
 // currentFleetContext is non-null while the map screen is open.
 let currentFleetContext = null;
+// Whether the fleet map has already fit its view to the first real vehicle
+// fetch's coordinates (see refreshVehicles) -- so it happens once, right
+// after opening, rather than re-fitting (and undoing the user's own pan or
+// zoom) on every REFRESH_INTERVAL_MS refresh after that.
+let fleetMapBoundsFitted = false;
 let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
@@ -1138,6 +1143,17 @@ async function refreshVehicles() {
       // The user may have switched mode (or closed the map) while this
       // fetch was in flight.
       if (currentFleetContext !== context) return;
+      // Frame the view around every vehicle actually running right now,
+      // rather than a fixed Bordeaux-center guess -- once, on the first
+      // real fetch after opening, not every refresh after that (which
+      // would keep undoing the user's own pan/zoom).
+      if (!fleetMapBoundsFitted && vehicles.length > 0 && lineMap) {
+        lineMap.fitBounds(
+          vehicles.map((vehicle) => [vehicle.latitude, vehicle.longitude]),
+          { padding: [30, 30], maxZoom: FULL_MAP_ZOOM },
+        );
+        fleetMapBoundsFitted = true;
+      }
       syncVehicleMarkers(vehicles);
       // The running count lives in the recap caption below the map
       // (updateFleetStats); #map-status stays for load errors only.
@@ -1244,10 +1260,32 @@ function centerOnUserLocation(map) {
       })
         .bindTooltip("Vous etes ici")
         .addTo(map);
-      map.setView(userPoint, map.getZoom());
+      // Keep the whole displayed line in view alongside the user's own
+      // position, rather than recentering tightly on just them -- if the
+      // user is some distance from the line, that would otherwise pan its
+      // route/stops/vehicles out of view entirely. Falls back to a plain
+      // recenter when there's no single line's own points to keep in frame
+      // (the fleet map, or a line whose stops/shape didn't load).
+      const linePoints = currentStopPoints.length > 0 ? currentStopPoints : currentRoutePolylines.flat();
+      if (linePoints.length > 0) {
+        map.fitBounds([...linePoints, userPoint], { padding: [20, 20] });
+      } else {
+        map.setView(userPoint, map.getZoom());
+      }
     },
     (err) => {
       console.warn("Geolocalisation indisponible :", err.message);
+      if (requestId !== geoRequestId) return;
+      // Silent failure used to mean tapping the recenter button did nothing
+      // visible at all -- most often because the browser already denied
+      // this site location access on an earlier visit, so it never even
+      // shows the OS permission prompt again.
+      const statusEl = document.getElementById("map-status");
+      if (!statusEl) return;
+      statusEl.textContent =
+        err.code === err.PERMISSION_DENIED
+          ? "Localisation refusee pour ce site -- verifie les autorisations de position dans les reglages de ton navigateur."
+          : "Position indisponible pour le moment.";
     },
     { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
   );
@@ -1275,6 +1313,14 @@ async function openLineMap(passage) {
   // The map container was hidden (display:none) until showScreen ran just
   // above, so Leaflet needs a nudge to pick up its now-real size.
   requestAnimationFrame(() => map.invalidateSize());
+  // A single line's own route/stops always show regardless of zoom -- but
+  // the fleet map's zoom gating (applyZoomScale) may have detached these
+  // same shared layers from the map entirely if it was open last at a low
+  // zoom, and nothing since re-attached them. Without this, a line opened
+  // right after visiting the fleet map would draw its route onto a layer
+  // that's silently not on the map at all.
+  if (!map.hasLayer(lineMapLayer)) map.addLayer(lineMapLayer);
+  if (!map.hasLayer(stopMarkersLayer)) map.addLayer(stopMarkersLayer);
 
   currentLinePassage = passage;
   currentFleetContext = null;
@@ -1444,11 +1490,14 @@ async function openFleetMap(mode) {
   const modeLines = lines.filter((line) => line.mode === mode);
   const linesById = new Map(modeLines.map((line) => [lineNumericId(line.ref), line]));
   currentFleetContext = { mode, linesById };
+  fleetMapBoundsFitted = false;
 
-  // No single route to fit the view to -- start centered on Bordeaux itself,
-  // then centerOnUserLocation narrows in once geolocation resolves.
+  // Placeholder view (Bordeaux-wide) until the first vehicle fetch lands
+  // and refreshVehicles fits the view to every vehicle's own coordinates
+  // instead -- centerOnUserLocation isn't called automatically here (it
+  // would fight with that fit); the recenter button still calls it on
+  // demand.
   map.setView([44.84, -0.58], 12);
-  centerOnUserLocation(map);
 
   // Only draw routes/stops for lines actually running right now, not the
   // full catalogue (~130+ bus lines, most idle at any given moment) --
