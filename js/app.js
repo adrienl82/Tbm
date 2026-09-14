@@ -1887,8 +1887,19 @@ init();
 // installable and its own static files load instantly on a later visit --
 // never gates page functionality on this, since older/unsupporting
 // browsers must keep working exactly as before.
+//
+// updateViaCache: "none" stops the browser from ever reusing its own plain
+// HTTP cache to check whether sw.js itself changed -- without it, a stale
+// HTTP-cached copy of sw.js can make the browser believe nothing changed
+// (byte-identical to what it already has) even right after a real deploy,
+// no matter how often CACHE_VERSION gets bumped inside it. The explicit
+// update() call on top asks for that check immediately on every load
+// rather than waiting for the browser's own schedule for it.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch((err) => console.error("Service worker non enregistre :", err));
+    navigator.serviceWorker
+      .register("sw.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch((err) => console.error("Service worker non enregistre :", err));
   });
 }

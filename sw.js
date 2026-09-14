@@ -8,7 +8,7 @@
 // The browser only re-checks this file's own bytes for updates, so editing
 // app.js/style.css/etc. without also bumping this constant leaves everyone
 // already installed stuck on the old cached copy indefinitely.
-const CACHE_VERSION = "v8";
+const CACHE_VERSION = "v9";
 const CACHE_NAME = `tbm-static-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -49,7 +49,15 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+      // cache.addAll() would fetch each URL with the browser's default HTTP
+      // caching -- fetching with cache:"reload" instead so a fresh install
+      // (e.g. right after a deploy) can't precache a stale HTTP-cached copy
+      // of any of these.
+      .then((cache) =>
+        Promise.all(
+          PRECACHE_URLS.map((url) => fetch(new Request(url, { cache: "reload" })).then((res) => cache.put(url, res))),
+        ),
+      )
       // Take over from any previously-installed worker immediately rather
       // than waiting for every open tab to close first, so a deploy's fix
       // actually reaches the next page load instead of an indeterminate
@@ -78,8 +86,16 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || NEVER_CACHE_HOSTS.has(url.hostname)) return; // let the browser handle it normally
 
+  // cache: "no-store" bypasses the browser's own plain HTTP cache too, not
+  // just this service worker's Cache Storage -- without it, "network-first"
+  // could still silently hand back a stale HTTP-cached response instead of
+  // actually reaching the network, defeating the whole point of this
+  // strategy. (Passing a Request object with its own cache mode already
+  // set is not overridable via fetch()'s second argument, hence rebuilding
+  // it here.)
+  const networkRequest = new Request(event.request, { cache: "no-store" });
   event.respondWith(
-    fetch(event.request)
+    fetch(networkRequest)
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();
