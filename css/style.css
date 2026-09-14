@@ -480,6 +480,25 @@ ul {
    strung out far from their real position the more of them were open at
    once. */
 
+/* Neighbourhood/quartier name (see js/quartiers.js): plain text, no marker
+   box -- the white text-shadow stands in for a background so names stay
+   readable over the basemap and route lines without covering them with an
+   actual box. Not clickable (see interactive:false where it's created), so
+   it never steals taps meant for a stop or vehicle underneath. */
+.quartier-label {
+  color: #6b6b6b;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-shadow:
+    0 0 3px #f7f7f4,
+    0 0 3px #f7f7f4,
+    0 0 3px #f7f7f4;
+  pointer-events: none;
+}
+
 /* Carries --veh (the zoom scale, see app.js applyZoomScale) down to the
    badge/arrow, which compute their sizes from it. display:contents so it
    generates no box -- the absolutely positioned .vehicle-pulse /

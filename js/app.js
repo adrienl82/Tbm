@@ -1,6 +1,7 @@
 import { TbmClient, stopNumericId } from "./tbmApi.js";
 import { FavoritesStore } from "./favorites.js";
 import { fetchLineShapes, lineNumericId } from "./lineShapes.js";
+import { QUARTIERS } from "./quartiers.js";
 import {
   countByRoute,
   fetchActiveRouteIds,
@@ -49,6 +50,11 @@ const LINE_FIT_ZOOM_IN = 2; // zoom levels to add after fitBounds on a single li
 // shown at any zoom). A single line's own map always shows its route
 // regardless of zoom; only the fleet view gates on this.
 const FLEET_ROUTES_MIN_ZOOM = 14;
+// Neighbourhood/quartier labels (see quartiers.js) only appear from this
+// zoom on -- showing all ~240 of them at a city-wide view would bury the
+// map in text; each is also culled to the current viewport (see
+// renderQuartierLabels), so this only bounds how zoomed in you need to be.
+const QUARTIER_LABELS_MIN_ZOOM = 13;
 
 // Route lines, stop dots and vehicle badges all shrink together toward
 // MIN_MAP_SCALE as the map zooms out, so a wide view isn't a fat tangle.
@@ -395,6 +401,7 @@ let lineMap = null;
 let lineMapLayer = null;
 let stopMarkersLayer = null;
 let vehicleLayer = null;
+let quartierLabelsLayer = null;
 let vehicleRefreshTimer = null;
 let vehicleAnimationFrame = null;
 // The live vehicles from the last real refresh, each paired with its own
@@ -482,6 +489,7 @@ function ensureLineMap() {
     "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
     { maxZoom: 19, maxNativeZoom: 16 },
   ).addTo(lineMap);
+  quartierLabelsLayer = L.layerGroup().addTo(lineMap);
   lineMapLayer = L.layerGroup().addTo(lineMap);
   stopMarkersLayer = L.layerGroup().addTo(lineMap);
   vehicleLayer = L.layerGroup().addTo(lineMap);
@@ -492,7 +500,29 @@ function ensureLineMap() {
     followedVehicleId = null;
   });
   lineMap.on("zoomend", applyZoomScale);
+  // moveend covers both panning and zooming (it fires after zoomend too),
+  // so this alone keeps the visible label set current either way.
+  lineMap.on("moveend", renderQuartierLabels);
   return lineMap;
+}
+
+// Redraws neighbourhood/quartier name labels (see quartiers.js) for whatever
+// is currently in view -- recomputed on every pan/zoom rather than drawn
+// once, since rendering all ~240 of them at once regardless of viewport
+// would be wasteful and, at a city-wide zoom, unreadable.
+function renderQuartierLabels() {
+  if (!lineMap || !quartierLabelsLayer) return;
+  quartierLabelsLayer.clearLayers();
+  if (lineMap.getZoom() < QUARTIER_LABELS_MIN_ZOOM) return;
+  const bounds = lineMap.getBounds();
+  for (const quartier of QUARTIERS) {
+    if (!bounds.contains([quartier.lat, quartier.lon])) continue;
+    L.marker([quartier.lat, quartier.lon], {
+      icon: L.divIcon({ className: "quartier-label", html: quartier.name, iconSize: null }),
+      interactive: false,
+      keyboard: false,
+    }).addTo(quartierLabelsLayer);
+  }
 }
 
 // Resizes the map's own drawn elements -- route polylines, stop dots and
@@ -517,6 +547,11 @@ function applyZoomScale() {
       if (stopMarkersLayer && lineMap.hasLayer(stopMarkersLayer)) lineMap.removeLayer(stopMarkersLayer);
     }
   }
+  // Also covered by the moveend listener, but that one can be skipped by
+  // Leaflet when a setView/fitBounds call doesn't actually move the map (e.g.
+  // reopening the same line) -- calling it here too keeps labels in sync
+  // with every explicit applyZoomScale() call regardless.
+  renderQuartierLabels();
   const scale = scaleForZoom(zoom);
   lineMapLayer?.eachLayer((layer) => {
     if (typeof layer.setStyle === "function") layer.setStyle({ weight: ROUTE_WEIGHT * scale });
