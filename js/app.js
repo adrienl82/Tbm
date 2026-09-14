@@ -503,6 +503,15 @@ function ensureLineMap() {
   // moveend covers both panning and zooming (it fires after zoomend too),
   // so this alone keeps the visible label set current either way.
   lineMap.on("moveend", renderQuartierLabels);
+  // The map screen is `hidden` (display:none, so a 0x0 container) until
+  // openLineMap/openFleetMap show it -- a single requestAnimationFrame
+  // after that isn't consistently late enough for the browser to have
+  // finished layout by then, especially on mobile, so Leaflet can still
+  // compute tiles for a stale (often 0x0) size and just show gray until
+  // some other interaction (e.g. a geolocation fix moving the view) forces
+  // it to recompute. Watching the container's real size directly instead
+  // of guessing a timeout catches that transition reliably.
+  new ResizeObserver(() => lineMap.invalidateSize()).observe(document.getElementById("line-map"));
   return lineMap;
 }
 
