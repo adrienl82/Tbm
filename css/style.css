@@ -135,6 +135,12 @@ input[type="search"] {
   font-size: inherit;
 }
 
+/* Same display:flex-vs-[hidden] issue as .direction-filters[hidden] above,
+   for hiding a single direction with nothing currently running that way. */
+.direction-filters label[hidden] {
+  display: none;
+}
+
 .mode-filters input[type="checkbox"],
 .direction-filters input[type="checkbox"] {
   width: 18px;

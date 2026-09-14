@@ -42,6 +42,12 @@ const MIN_MAP_ZOOM = 11;
 const FULL_MAP_ZOOM = 13; // at/above this zoom everything is drawn full size
 const MIN_MAP_SCALE = 1 / 3; // floor: reached at MIN_MAP_ZOOM (the widest view)
 const LINE_FIT_ZOOM_IN = 2; // zoom levels to add after fitBounds on a single line
+// Fleet map only: routes + stops (drawFleetLines) stay hidden below this
+// zoom -- with dozens of bus lines active at once, drawing them all at the
+// initial city-wide view is an unreadable tangle (vehicles alone are still
+// shown at any zoom). A single line's own map always shows its route
+// regardless of zoom; only the fleet view gates on this.
+const FLEET_ROUTES_MIN_ZOOM = 14;
 
 // Route lines, stop dots and vehicle badges all shrink together toward
 // MIN_MAP_SCALE as the map zooms out, so a wide view isn't a fat tangle.
@@ -51,10 +57,12 @@ function scaleForZoom(zoom) {
   return Math.max(MIN_MAP_SCALE, Math.min(1, 1 - t * (1 - MIN_MAP_SCALE)));
 }
 
-// The fleet map draws every line's route + stops only when there aren't too
-// many (the 6 trams, yes; ~80 bus lines would be 80 network round-trips and
-// an unreadable tangle).
-const FLEET_MAP_MAX_LINES = 12;
+// The fleet map draws every currently-active line's route + stops only when
+// there aren't too many -- scoped to lines with a vehicle running right now
+// (see getActiveRouteIds), not the full catalogue (~130+ bus lines,
+// including ones that don't run at all right now), which keeps this well
+// under the full network's size even for buses.
+const FLEET_MAP_MAX_LINES = 80;
 
 // How far a live vehicle may sit from its own line's nearest stop and still
 // be trusted (meters). TBM's GTFS-RT feed occasionally mistags a vehicle
@@ -471,7 +479,22 @@ function ensureLineMap() {
 // already start at the right scale (see syncVehicleMarkers).
 function applyZoomScale() {
   if (!lineMap) return;
-  const scale = scaleForZoom(lineMap.getZoom());
+  const zoom = lineMap.getZoom();
+  // Fleet map only (see FLEET_ROUTES_MIN_ZOOM): toggle whether the drawn
+  // routes/stops are attached to the map at all, rather than just fading
+  // them out, so a zoomed-out view with dozens of bus lines doesn't also
+  // pay for rendering them.
+  if (currentFleetContext) {
+    const showRoutes = zoom >= FLEET_ROUTES_MIN_ZOOM;
+    if (showRoutes) {
+      if (lineMapLayer && !lineMap.hasLayer(lineMapLayer)) lineMap.addLayer(lineMapLayer);
+      if (stopMarkersLayer && !lineMap.hasLayer(stopMarkersLayer)) lineMap.addLayer(stopMarkersLayer);
+    } else {
+      if (lineMapLayer && lineMap.hasLayer(lineMapLayer)) lineMap.removeLayer(lineMapLayer);
+      if (stopMarkersLayer && lineMap.hasLayer(stopMarkersLayer)) lineMap.removeLayer(stopMarkersLayer);
+    }
+  }
+  const scale = scaleForZoom(zoom);
   lineMapLayer?.eachLayer((layer) => {
     if (typeof layer.setStyle === "function") layer.setStyle({ weight: ROUTE_WEIGHT * scale });
   });
@@ -637,12 +660,19 @@ function directionShown(vehicle) {
 
 // Names the two direction checkboxes after each direction's headsign (from
 // the live feed), using the full line's vehicles so a hidden direction still
-// gets its label.
+// gets its label, and hides either checkbox entirely when nothing is
+// currently running that way -- offering a filter for a direction with
+// nothing to filter is just a dead control.
 function updateDirectionLabels(allLineVehicles) {
+  const counts = { 0: 0, 1: 0 };
   for (const summary of summarizeByDirection(allLineVehicles)) {
     if (summary.directionId !== 0 && summary.directionId !== 1) continue;
+    counts[summary.directionId] = summary.count;
     const el = document.getElementById(`dir-${summary.directionId}-label`);
     if (el && summary.label) el.textContent = `Vers ${summary.label}`;
+  }
+  for (const id of [0, 1]) {
+    document.getElementById(`dir-${id}`).closest("label").hidden = counts[id] === 0;
   }
 }
 
@@ -654,6 +684,10 @@ function resetDirectionFilter(show) {
   lastLineVehicles = [];
   document.getElementById("dir-0").checked = true;
   document.getElementById("dir-1").checked = true;
+  // Shown again until the first refresh's updateDirectionLabels hides
+  // whichever direction turns out to have nothing running.
+  document.getElementById("dir-0").closest("label").hidden = false;
+  document.getElementById("dir-1").closest("label").hidden = false;
   document.getElementById("dir-0-label").textContent = "Sens 1";
   document.getElementById("dir-1-label").textContent = "Sens 2";
   document.getElementById("direction-filters").hidden = !show;
@@ -1378,8 +1412,9 @@ async function openFleetMap(mode) {
   currentStopNames = new Map();
 
   let lines = [];
+  let activeIds = null;
   try {
-    lines = await client.listLines();
+    [lines, activeIds] = await Promise.all([client.listLines(), getActiveRouteIds()]);
   } catch (err) {
     console.error("Impossible de charger les lignes :", err);
   }
@@ -1393,8 +1428,15 @@ async function openFleetMap(mode) {
   map.setView([44.84, -0.58], 12);
   centerOnUserLocation(map);
 
-  if (modeLines.length > 0 && modeLines.length <= FLEET_MAP_MAX_LINES) {
-    const linesByRef = new Map(modeLines.map((line) => [line.ref, line]));
+  // Only draw routes/stops for lines actually running right now, not the
+  // full catalogue (~130+ bus lines, most idle at any given moment) --
+  // otherwise buses would almost always blow past FLEET_MAP_MAX_LINES even
+  // though a much smaller number are genuinely active. Falls back to every
+  // catalogued line of this mode if activity couldn't be determined (see
+  // getActiveRouteIds), same as the home screen's line list.
+  const activeModeLines = activeIds ? modeLines.filter((line) => activeIds.has(lineNumericId(line.ref))) : modeLines;
+  if (activeModeLines.length > 0 && activeModeLines.length <= FLEET_MAP_MAX_LINES) {
+    const linesByRef = new Map(activeModeLines.map((line) => [line.ref, line]));
     drawFleetLines(linesByRef, () => requestId === lineMapRequestId && currentFleetContext?.mode === mode);
   }
 
