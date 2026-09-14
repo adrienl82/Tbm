@@ -95,42 +95,49 @@ const screens = {
 let refreshTimer = null;
 let currentStop = null;
 
-// Official TBM tram line colors.
+// Official TBM tram line colors, from the route_color column of TBM's GTFS
+// feed (routes.txt) -- the same static feed TBM's own site and apps use.
 const TRAM_LINE_COLORS = {
-  A: "#802991", // Violet
-  B: "#EE154A", // Rouge
-  C: "#D34F98", // Rose
-  D: "#8B64A5", // Violet clair / Parme
-  E: "#80684C", // Brun / Taupe
-  F: "#E8822F", // Orange
+  A: "#831F82",
+  B: "#E50040",
+  C: "#D35098",
+  D: "#9262A3",
+  E: "#967651",
+  F: "#F08700",
 };
 
 // Bus lines don't have one official color per line like trams do -- TBM
 // colors them as badges (background + text) by category instead, inferred
-// here from the line's own name (LineName from lines-discovery.json).
-// A few individual lines (specific navettes, ex-TransGironde regional
-// lines folded into the network) get their own dedicated colors by code.
+// here from the line's own name (LineName from lines-discovery.json), with
+// route_color values pulled from the same GTFS feed as the tram colors
+// above. A few individual lines (TBNight, LE BATO, Navette Arena) get their
+// own dedicated colors by code because GTFS gives each of them a distinct
+// color rather than one shared per category.
 const BUS_LINE_COLORS_BY_CODE = {
-  18: { background: "#E01745", color: "#ffffff" }, // Navette Stade
-  19: { background: "#CD117F", color: "#ffffff" }, // Navette Arena
-  301: { background: "#6E8878", color: "#ffffff" },
-  302: { background: "#B05F0F", color: "#ffffff" },
-  303: { background: "#F0CB02", color: "#000000" },
-  304: { background: "#EE0000", color: "#ffffff" },
-  310: { background: "#77278D", color: "#ffffff" },
-  313: { background: "#0073AE", color: "#ffffff" },
+  Arena: { background: "#CD117E", color: "#ffffff" }, // Navette Arena
+  "39 Est": { background: "#00B1EB", color: "#ffffff" },
+  951: { background: "#006BB5", color: "#ffffff" }, // LE BATO 1
+  952: { background: "#006BB5", color: "#ffffff" }, // LE BATO 2
+  953: { background: "#006BB5", color: "#ffffff" }, // LE BATO 3
+  N1: { background: "#00567A", color: "#ffffff" },
+  N2: { background: "#6E6700", color: "#ffffff" },
+  N3: { background: "#1A5031", color: "#ffffff" },
+  N4: { background: "#670034", color: "#ffffff" },
+  N5: { background: "#24195D", color: "#ffffff" },
+  N6: { background: "#50145C", color: "#ffffff" },
+  N7: { background: "#500800", color: "#ffffff" },
+  N8: { background: "#693000", color: "#ffffff" },
 };
 
-const SCODI_COLOR = "#0C4F9D";
+const SCODI_COLOR = "#164194";
 
 const BUS_CATEGORY_COLORS = [
-  [/^bus express/i, "#E52423"], // Lignes structurantes directes (G, H, F41-F44)
-  [/^lianes/i, "#E65A00"],
-  [/^principale/i, "#009639"],
-  [/^locale/i, "#7D2181"],
-  [/^directe/i, "#006CA9"],
-  [/^flex'/i, "#F2AE00"],
-  [/^tbnight/i, "#F2AE00"],
+  [/^bus express/i, "#006685"], // Lignes structurantes directes (G, H1, H2...)
+  [/^lianes/i, "#00B1EB"],
+  [/^principale/i, "#00A98B"],
+  [/^locale/i, "#76B82A"],
+  [/^directe/i, "#4A4A49"],
+  [/^flex'/i, "#76B82A"],
 ];
 
 // Returns { background, color } for a badge, or { outline } for the
