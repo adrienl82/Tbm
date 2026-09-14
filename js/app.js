@@ -364,15 +364,19 @@ function selectedModes() {
   return null; // neither: shouldn't happen, at least one stays checked
 }
 
-// Keeps the URL's query string (?arret=...&modes=tram&modes=bus[&stop=ref])
-// in sync with the current form/screen so a page refresh -- or a
-// bookmarked/shared link -- restores the exact same search, filters, and
-// (if one was open) stop board. The arret/modes part is built straight from
-// the form's own GET encoding (FormData); stopRef is added on top when a
-// board is showing.
-function syncUrl(stopRef = null) {
+// Keeps the URL's query string (?arret=...&modes=tram&modes=bus[&stop=ref]
+// [&line=ref | &fleet=tram|bus]) in sync with the current form/screen so a
+// page refresh -- or a bookmarked/shared link -- restores the exact same
+// search, filters, and whichever of a stop board/line map/fleet map was
+// open. The arret/modes part is built straight from the form's own GET
+// encoding (FormData); stop/line/fleet are added on top, whichever applies
+// to the screen currently showing -- omitting all three (the default) drops
+// them from the URL entirely rather than carrying over a stale one.
+function syncUrl({ stop = null, line = null, fleet = null } = {}) {
   const params = new URLSearchParams(new FormData(searchForm));
-  if (stopRef) params.set("stop", stopRef);
+  if (stop) params.set("stop", stop);
+  if (line) params.set("line", line);
+  if (fleet) params.set("fleet", fleet);
   const search = params.toString();
   history.replaceState(null, "", search ? `?${search}` : location.pathname);
 }
@@ -1458,6 +1462,7 @@ async function openLineMap(passage) {
   // it from the board. "Retour" should go back to whichever that was.
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
   showScreen("map");
+  syncUrl({ line: passage.lineRef });
   const map = ensureLineMap();
   // The map container was hidden (display:none) until showScreen ran just
   // above, so Leaflet needs a nudge to pick up its now-real size.
@@ -1644,6 +1649,7 @@ async function openFleetMap(mode) {
   resetDirectionFilter(false); // fleet map: "direction" isn't one thing across lines
   mapReturnScreen = Object.keys(screens).find((key) => !screens[key].hidden) ?? "search";
   showScreen("map");
+  syncUrl({ fleet: mode });
   const map = ensureLineMap();
   requestAnimationFrame(() => map.invalidateSize());
 
@@ -1728,7 +1734,7 @@ function openBoard(stop) {
   refreshBoard();
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(refreshBoard, REFRESH_INTERVAL_MS);
-  syncUrl(stop.ref);
+  syncUrl({ stop: stop.ref });
 }
 
 async function renderFavorites() {
@@ -1765,10 +1771,16 @@ for (const id of ["filter-tram", "filter-bus"]) {
       event.target.checked = true; // keep at least one mode selected
       return;
     }
-    // The filter is shared across screens: re-render whichever one is showing.
+    // The filter is shared across screens: re-render whichever one is
+    // showing, and keep the URL's ?stop=/?line=/?fleet= matching it rather
+    // than dropping it just because the filter changed.
     if (!screens.board.hidden) {
-      syncUrl(currentStop.ref);
+      syncUrl({ stop: currentStop.ref });
       refreshBoard();
+    } else if (!screens.map.hidden && currentLinePassage) {
+      syncUrl({ line: currentLinePassage.lineRef });
+    } else if (!screens.map.hidden && currentFleetContext) {
+      syncUrl({ fleet: currentFleetContext.mode });
     } else {
       syncUrl();
       runSearch(document.getElementById("search-input").value);
@@ -1789,6 +1801,9 @@ document.getElementById("back-from-favorites").addEventListener("click", goHome)
 document.getElementById("back-from-map").addEventListener("click", () => {
   closeLineMap();
   showScreen(mapReturnScreen);
+  // Drop the ?line=/?fleet= param; restore ?stop= instead when heading back
+  // to a stop board rather than the search screen.
+  syncUrl(mapReturnScreen === "board" && currentStop ? { stop: currentStop.ref } : {});
 });
 
 document.getElementById("tab-vehicles").addEventListener("click", () => selectTab(null));
@@ -1835,6 +1850,22 @@ async function init() {
   }
   if (!document.getElementById("filter-tram").checked && !document.getElementById("filter-bus").checked) {
     document.getElementById("filter-tram").checked = true; // never leave both unchecked
+  }
+
+  const lineRef = params.get("line");
+  if (lineRef) {
+    const lines = await client.listLines();
+    const line = lines.find((l) => l.ref === lineRef);
+    if (line) {
+      openLineMap(lineAsPassage(line)); // refreshing a line map reopens the same line instead of losing it
+      return;
+    }
+  }
+
+  const fleetMode = params.get("fleet");
+  if (fleetMode === "tram" || fleetMode === "bus") {
+    openFleetMap(fleetMode); // refreshing a fleet map reopens the same one instead of losing it
+    return;
   }
 
   const stopRef = params.get("stop");
