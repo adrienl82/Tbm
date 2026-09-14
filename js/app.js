@@ -513,6 +513,12 @@ let fleetStopPointsByRoute = new Map();
 let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
+// Set once the user has actually pressed the recenter button -- from then
+// on, switching to another line's map recenters automatically again
+// (see openLineMap). Permission was already granted by that first tap, so
+// this never triggers a fresh prompt; it just saves having to press the
+// button again on every single line after the first.
+let autoRecenterOnOpen = false;
 let currentStopNames = new Map();
 let currentStopPoints = [];
 let lineMapRequestId = 0;
@@ -1536,11 +1542,11 @@ async function openLineMap(passage) {
   // Fit to whichever points are actually trustworthy: the route when it
   // checked out, otherwise the stops so the map still lands on the line.
   // fitBounds on a whole line lands quite wide; nudge in a step so it opens
-  // closer to street level. Geolocation is only ever requested from the
-  // explicit recenter button now, never automatically on open -- the same
-  // call used to fire here too, silently requesting location on every
-  // single line opened (permission prompts, denials, and slow/failed fixes
-  // included) for a recenter the user hadn't asked for.
+  // closer to street level. Geolocation is never requested automatically
+  // until the user has pressed the recenter button at least once (see
+  // autoRecenterOnOpen below) -- opening a line used to always silently
+  // request location on its own (permission prompts, denials, and slow/
+  // failed fixes included) for a recenter the user hadn't asked for yet.
   //
   // This must run before applyZoomScale(): on a brand new map (the very
   // first one opened this session) nothing has ever called setView/
@@ -1556,6 +1562,12 @@ async function openLineMap(passage) {
     map.setZoom(Math.min(map.getMaxZoom(), map.getZoom() + LINE_FIT_ZOOM_IN), { animate: false });
   }
   applyZoomScale();
+  // Once the user has opted in via the recenter button, keep recentering
+  // automatically on every line switch too -- permission is already
+  // granted by then, so this never shows a fresh prompt, it just saves
+  // having to press the button again for every single line after the
+  // first.
+  if (autoRecenterOnOpen) centerOnUserLocation(map);
 
   refreshVehicles();
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
@@ -1789,6 +1801,7 @@ for (const id of ["dir-0", "dir-1"]) {
 }
 
 document.getElementById("recenter-button").addEventListener("click", () => {
+  autoRecenterOnOpen = true;
   if (lineMap) centerOnUserLocation(lineMap);
 });
 
