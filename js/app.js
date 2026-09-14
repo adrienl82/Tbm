@@ -430,6 +430,16 @@ let currentFleetContext = null;
 // after opening, rather than re-fitting (and undoing the user's own pan or
 // zoom) on every REFRESH_INTERVAL_MS refresh after that.
 let fleetMapBoundsFitted = false;
+// Numeric line id -> that line's own stop points ([lat, lon] pairs),
+// filled in as drawFleetLines fetches each active line's stops. Lets
+// refreshVehicles drop a fleet vehicle whose reported position is nowhere
+// near its own claimed line's stops -- the same GTFS-RT mistagging sanity
+// check single-line mode already does with currentStopPoints, just keyed
+// per line since the fleet map mixes several at once. A line with no
+// entry here (route/stop fetch still pending, failed, or the fleet view
+// skipped drawing routes entirely) isn't filtered -- fails open rather
+// than hiding vehicles on a line we simply don't have stops for yet.
+let fleetStopPointsByRoute = new Map();
 let mapReturnScreen = "search";
 let geoRequestId = 0;
 let userLocationMarker = null;
@@ -1139,10 +1149,23 @@ async function refreshVehicles() {
   if (currentFleetContext) {
     const context = currentFleetContext;
     try {
-      const vehicles = await fetchVehiclePositionsForRoutes(new Set(context.linesById.keys()));
+      const rawVehicles = await fetchVehiclePositionsForRoutes(new Set(context.linesById.keys()));
       // The user may have switched mode (or closed the map) while this
       // fetch was in flight.
       if (currentFleetContext !== context) return;
+      // TBM's GTFS-RT feed occasionally mistags a vehicle with the wrong
+      // route_id -- it then reports a real position, just nowhere near the
+      // stops of the line it claims to be on. Single-line mode already
+      // drops these against that line's own stops; here each vehicle is
+      // checked against its own claimed line's stops instead, since the
+      // fleet map mixes many. A line with no stops on file yet (still
+      // loading, fetch failed, or FLEET_MAP_MAX_LINES was exceeded) isn't
+      // filtered -- better to show a vehicle we can't verify than to hide
+      // it outright.
+      const vehicles = rawVehicles.filter((vehicle) => {
+        const stopPoints = fleetStopPointsByRoute.get(vehicle.routeId);
+        return !stopPoints || isNearAnyPoint([vehicle.latitude, vehicle.longitude], stopPoints, VEHICLE_STOP_DISTANCE_METERS);
+      });
       // Frame the view around every vehicle actually running right now,
       // rather than a fixed Bordeaux-center guess -- once, on the first
       // real fetch after opening, not every refresh after that (which
@@ -1353,8 +1376,11 @@ async function openLineMap(passage) {
     // Bordeaux Metropole's open data frequently tags a route shape with the
     // wrong line id -- if it doesn't actually pass near most of this line's
     // own stops, it's not this line's route: skip drawing it rather than
-    // show a confidently wrong path.
-    if (shapes.length > 0 && !shapeCoversStops(shapePoints, stopPoints)) {
+    // show a confidently wrong path. shapeCoversStops already returns false
+    // for an empty shapePoints array (no shape records at all for this
+    // line), so that case shows the same message instead of silently
+    // drawing nothing with no explanation.
+    if (!shapeCoversStops(shapePoints, stopPoints)) {
       statusEl.textContent = "Trace indisponible pour cette ligne";
     } else {
       for (const shape of shapes) {
@@ -1371,6 +1397,12 @@ async function openLineMap(passage) {
     }
   } catch (err) {
     console.error("Impossible de charger le trace de la ligne :", err);
+    // A network hiccup fetching the shape (more likely on a spotty mobile
+    // connection) used to fail this completely silently -- stops and
+    // vehicles still loaded fine (separate fetches), so the map looked
+    // normal except for a route that just never appeared, with nothing
+    // explaining why.
+    statusEl.textContent = "Trace indisponible pour cette ligne (erreur reseau)";
   }
   if (requestId !== lineMapRequestId) return;
 
@@ -1423,6 +1455,10 @@ async function drawFleetLines(linesByRef, guard) {
         client.stopsForLine(line.ref).catch(() => []),
       ]);
       if (!guard()) return;
+      const numericLineId = lineNumericId(line.ref);
+      if (numericLineId && stops.length > 0) {
+        fleetStopPointsByRoute.set(numericLineId, stops.map((stop) => [stop.latitude, stop.longitude]));
+      }
       for (const shape of shapes) {
         L.polyline(shape.latLngs, {
           color: lineColor,
@@ -1491,6 +1527,7 @@ async function openFleetMap(mode) {
   const linesById = new Map(modeLines.map((line) => [lineNumericId(line.ref), line]));
   currentFleetContext = { mode, linesById };
   fleetMapBoundsFitted = false;
+  fleetStopPointsByRoute = new Map();
 
   // Placeholder view (Bordeaux-wide) until the first vehicle fetch lands
   // and refreshVehicles fits the view to every vehicle's own coordinates
