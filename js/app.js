@@ -54,7 +54,7 @@ const FLEET_ROUTES_MIN_ZOOM = 14;
 // zoom on -- showing all ~240 of them at a city-wide view would bury the
 // map in text; each is also culled to the current viewport (see
 // renderQuartierLabels), so this only bounds how zoomed in you need to be.
-const QUARTIER_LABELS_MIN_ZOOM = 15;
+const QUARTIER_LABELS_MIN_ZOOM = 13;
 
 // Route lines, stop dots and vehicle badges all shrink together toward
 // MIN_MAP_SCALE as the map zooms out, so a wide view isn't a fat tangle.
