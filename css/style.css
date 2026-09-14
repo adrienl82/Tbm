@@ -479,6 +479,22 @@ ul {
   overflow: hidden;
 }
 
+/* #app is capped at a phone-sized 480px everywhere else -- worth it on a
+   real desktop screen only for the map itself, since that's the one screen
+   that actually benefits from the extra room (a search/favorites list just
+   stretched wider reads worse, not better). :has() lets this key off which
+   screen is actually showing without any JS involvement. */
+@media (min-width: 900px) {
+  #app:has(#screen-map:not([hidden])) {
+    max-width: 1100px;
+  }
+
+  #line-map {
+    aspect-ratio: 16 / 10;
+    max-height: 78vh;
+  }
+}
+
 /* No position rule here: Leaflet's own stylesheet already sets
    position:absolute on .leaflet-marker-icon (which every .vehicle-marker
    is), and that alone is a valid containing block for .vehicle-pulse's

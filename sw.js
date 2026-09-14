@@ -8,7 +8,7 @@
 // The browser only re-checks this file's own bytes for updates, so editing
 // app.js/style.css/etc. without also bumping this constant leaves everyone
 // already installed stuck on the old cached copy indefinitely.
-const CACHE_VERSION = "v5";
+const CACHE_VERSION = "v6";
 const CACHE_NAME = `tbm-static-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
