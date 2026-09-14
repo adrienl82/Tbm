@@ -1422,13 +1422,19 @@ function centerOnUserLocation(map) {
       // Silent failure used to mean tapping the recenter button did nothing
       // visible at all -- most often because the browser already denied
       // this site location access on an earlier visit, so it never even
-      // shows the OS permission prompt again.
+      // shows the OS permission prompt again. Falling back to fitting the
+      // line itself gives the button something to actually do even without
+      // location: not a recenter on "you", but still a useful "show me the
+      // whole line" reset.
       const statusEl = document.getElementById("map-status");
-      if (!statusEl) return;
-      statusEl.textContent =
-        err.code === err.PERMISSION_DENIED
-          ? "Localisation refusee pour ce site -- verifie les autorisations de position dans les reglages de ton navigateur."
-          : "Position indisponible pour le moment.";
+      if (statusEl) {
+        statusEl.textContent =
+          err.code === err.PERMISSION_DENIED
+            ? "Localisation refusee pour ce site -- verifie les autorisations de position dans les reglages de ton navigateur."
+            : "Position indisponible pour le moment.";
+      }
+      const linePoints = currentStopPoints.length > 0 ? currentStopPoints : currentRoutePolylines.flat();
+      if (linePoints.length > 0) map.fitBounds(linePoints, { padding: [20, 20] });
     },
     { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
   );
