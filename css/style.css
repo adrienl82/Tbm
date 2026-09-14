@@ -147,6 +147,13 @@ input[type="search"] {
   height: 18px;
 }
 
+.direction-filters button {
+  margin-left: auto;
+  padding: 4px 8px;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
 button {
   font: inherit;
   border: none;

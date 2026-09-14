@@ -11,6 +11,7 @@ import {
 import { fetchTripStops } from "./tripUpdates.js";
 import { distanceMeters, isNearAnyPoint, shapeCoversStops } from "./geoBounds.js";
 import {
+  angleBetweenBearings,
   bearingBetween,
   distanceToStopAhead,
   earliestStillSince,
@@ -1072,9 +1073,10 @@ function syncVehicleMarkers(vehicles) {
       // rather than reused from the previous entry.
       headingEl: marker.getElement()?.querySelector(".vehicle-heading") ?? null,
       // Carried forward across refreshes so animateVehicles() can tell how
-      // far (and which way) the marker actually moved since last frame,
-      // instead of resetting to "no movement yet" every refresh.
-      lastAnimatedPosition: previous?.lastAnimatedPosition ?? null,
+      // far (and which way) the dead-reckoned estimate actually moved since
+      // last frame, instead of resetting to "no movement yet" every
+      // refresh.
+      lastEstimatedPosition: previous?.lastEstimatedPosition ?? null,
       // Distance to the line's own closest stop actually ahead of this
       // vehicle at this last known fix -- animateVehicles() uses it so a
       // fast vehicle's estimated position never creeps past a stop it's
@@ -1184,13 +1186,33 @@ function animateVehicles() {
     }
     marker.setLatLng(position);
 
-    if (entry.headingEl && entry.lastAnimatedPosition) {
-      const moved = distanceMeters(entry.lastAnimatedPosition, position);
+    // Heading is derived from the dead-reckoned estimate's own progress,
+    // not from the displayed (possibly still transitioning) position: when
+    // a fresh real fix lands behind where the marker had drifted to (it
+    // overshot, or the route-following projection corrects itself), the
+    // POSITION_TRANSITION_MS blend eases the *displayed* dot backwards for
+    // a moment -- using that for heading would flip the arrow to point the
+    // wrong way for the whole transition instead of reflecting the
+    // vehicle's actual direction of travel.
+    if (entry.headingEl && entry.lastEstimatedPosition) {
+      const moved = distanceMeters(entry.lastEstimatedPosition, estimated);
       if (moved >= HEADING_UPDATE_MIN_METERS) {
-        entry.headingEl.style.transform = `rotate(${bearingBetween(entry.lastAnimatedPosition, position)}deg)`;
+        const frameBearing = bearingBetween(entry.lastEstimatedPosition, estimated);
+        // A fresh real fix can land behind where the previous refresh's
+        // estimate had walked to (an overshoot correcting itself), and
+        // projecting onto a route polyline through a tight curve can
+        // briefly snap to a different nearby point on it -- either one
+        // shows up as a single frame's heading swinging sharply away from
+        // the vehicle's own last reported GPS bearing. Ignoring those (and
+        // keeping whatever heading was already showing) avoids the arrow
+        // flipping to face backward for a frame instead of reflecting the
+        // vehicle's real direction of travel.
+        if (vehicle.bearing === null || angleBetweenBearings(frameBearing, vehicle.bearing) <= 100) {
+          entry.headingEl.style.transform = `rotate(${frameBearing}deg)`;
+        }
       }
     }
-    entry.lastAnimatedPosition = position;
+    entry.lastEstimatedPosition = estimated;
 
     if (vehicle.id && vehicle.id === followedVehicleId) {
       lineMap.setView(position, lineMap.getZoom(), { animate: false });
@@ -1555,6 +1577,10 @@ for (const id of ["dir-0", "dir-1"]) {
     reapplyDirectionFilter();
   });
 }
+
+document.getElementById("recenter-button").addEventListener("click", () => {
+  if (lineMap) centerOnUserLocation(lineMap);
+});
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
   showScreen("favorites");
