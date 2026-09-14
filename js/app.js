@@ -365,20 +365,52 @@ function selectedModes() {
 }
 
 // Keeps the URL's query string (?arret=...&modes=tram&modes=bus[&stop=ref]
-// [&line=ref | &fleet=tram|bus]) in sync with the current form/screen so a
-// page refresh -- or a bookmarked/shared link -- restores the exact same
-// search, filters, and whichever of a stop board/line map/fleet map was
-// open. The arret/modes part is built straight from the form's own GET
-// encoding (FormData); stop/line/fleet are added on top, whichever applies
-// to the screen currently showing -- omitting all three (the default) drops
-// them from the URL entirely rather than carrying over a stale one.
-function syncUrl({ stop = null, line = null, fleet = null } = {}) {
+// [&line=ref | &fleet=tram|bus][&zoom=&lat=&lng=][&veh=id1,id2&active=id|all])
+// in sync with the current form/screen so a page refresh -- or a
+// bookmarked/shared link -- restores the exact same search, filters,
+// whichever of a stop board/line map/fleet map was open, and (for a map)
+// its pan/zoom and open vehicle detail tabs. The arret/modes part is built
+// straight from the form's own GET encoding (FormData); everything else is
+// added on top, whichever applies -- omitting a field (the default) drops
+// it from the URL entirely rather than carrying over a stale one.
+function syncUrl({ stop = null, line = null, fleet = null, zoom = null, lat = null, lng = null, veh = null, active = null } = {}) {
   const params = new URLSearchParams(new FormData(searchForm));
   if (stop) params.set("stop", stop);
   if (line) params.set("line", line);
   if (fleet) params.set("fleet", fleet);
+  if (zoom !== null) params.set("zoom", zoom);
+  if (lat !== null) params.set("lat", lat.toFixed(5));
+  if (lng !== null) params.set("lng", lng.toFixed(5));
+  if (veh) params.set("veh", veh);
+  if (active !== null) params.set("active", active);
   const search = params.toString();
   history.replaceState(null, "", search ? `?${search}` : location.pathname);
+}
+
+// Layers the map's own state -- pan/zoom and open vehicle detail tabs -- on
+// top of whichever of line/fleet is currently open, via syncUrl(). Called
+// whenever any of that changes (see ensureLineMap's moveend listener, and
+// wherever a detail tab opens/closes/gets selected) rather than baked into
+// openLineMap/openFleetMap themselves, since those already write the
+// line/fleet part before the map has a real view or any vehicles loaded.
+function syncMapUrl() {
+  if (screens.map.hidden) return;
+  const extra = {};
+  if (currentLinePassage) extra.line = currentLinePassage.lineRef;
+  else if (currentFleetContext) extra.fleet = currentFleetContext.mode;
+  else return; // mid-transition (e.g. resetMapTabs before the new line/fleet is set) -- nothing to sync yet
+  if (lineMap && typeof lineMap.getZoom() === "number") {
+    extra.zoom = lineMap.getZoom();
+    const center = lineMap.getCenter();
+    extra.lat = center.lat;
+    extra.lng = center.lng;
+  }
+  const vehIds = [...detailTabs.keys()];
+  if (vehIds.length > 0) {
+    extra.veh = vehIds.join(",");
+    extra.active = activeDetailId ?? "all";
+  }
+  syncUrl(extra);
 }
 
 async function runSearch(query) {
@@ -569,6 +601,7 @@ function ensureLineMap() {
   // moveend covers both panning and zooming (it fires after zoomend too),
   // so this alone keeps the visible label set current either way.
   lineMap.on("moveend", renderQuartierLabels);
+  lineMap.on("moveend", syncMapUrl);
   // The map screen is `hidden` (display:none, so a 0x0 container) until
   // openLineMap/openFleetMap show it -- a single requestAnimationFrame
   // after that isn't consistently late enough for the browser to have
@@ -993,10 +1026,12 @@ function createDetailTab(vehicle) {
   tabBtn.addEventListener("click", () => {
     selectTab(vehicle.id);
     renderVehicleDetail(vehicle.id);
+    syncMapUrl();
   });
   close.addEventListener("click", (event) => {
     event.stopPropagation();
     closeDetailTab(vehicle.id);
+    syncMapUrl();
   });
   document.getElementById("tab-bar").appendChild(tabBtn);
 
@@ -1026,6 +1061,7 @@ function openVehicleDetail(vehicleId) {
   if (!detailTabs.has(vehicleId)) createDetailTab(entry.vehicle);
   selectTab(vehicleId);
   renderVehicleDetail(vehicleId);
+  syncMapUrl();
 }
 
 // "dans 3 min (14:07)" -- the trip-updates feed's own predicted arrival,
@@ -1444,7 +1480,11 @@ function centerOnUserLocation(map) {
   );
 }
 
-async function openLineMap(passage) {
+// restore, when given (only ever by init() reopening a bookmarked/refreshed
+// URL), carries a previously-saved { zoom, lat, lng, veh, active } to put
+// the map back exactly where it was instead of re-fitting to the line and
+// starting with no detail tabs open (see syncMapUrl).
+async function openLineMap(passage, restore = null) {
   // Opening a line is async (stops, then shape, both fetched over the
   // network); if the user switches to another line before those resolve, a
   // late response must not paint its stops/route onto the line now showing.
@@ -1567,24 +1607,36 @@ async function openLineMap(passage) {
   // rest of this function silently -- no route, no vehicles, no refresh
   // loop -- on every fresh page load, recovering only once something else
   // (the recenter button) gave the map its first view.
-  const fitPoints = routeBounds.length > 0 ? routeBounds : stopPoints;
-  if (fitPoints.length > 0) {
-    map.fitBounds(fitPoints, { padding: [20, 20], animate: false });
-    map.setZoom(Math.min(map.getMaxZoom(), map.getZoom() + LINE_FIT_ZOOM_IN), { animate: false });
+  if (restore) {
+    map.setView([restore.lat, restore.lng], restore.zoom, { animate: false });
+  } else {
+    const fitPoints = routeBounds.length > 0 ? routeBounds : stopPoints;
+    if (fitPoints.length > 0) {
+      map.fitBounds(fitPoints, { padding: [20, 20], animate: false });
+      map.setZoom(Math.min(map.getMaxZoom(), map.getZoom() + LINE_FIT_ZOOM_IN), { animate: false });
+    }
   }
   applyZoomScale();
   // Once the user has opted in via the recenter button, keep recentering
   // automatically on every line switch too -- permission is already
   // granted by then, so this never shows a fresh prompt, it just saves
   // having to press the button again for every single line after the
-  // first.
-  if (autoRecenterOnOpen) centerOnUserLocation(map);
+  // first. Skipped when restoring a saved view -- that already picked a
+  // deliberate position, which an automatic recenter would just override.
+  if (!restore && autoRecenterOnOpen) centerOnUserLocation(map);
 
-  refreshVehicles();
+  // Awaited (rather than fire-and-forget like every later refresh) only so
+  // a saved vehicle detail tab below has activeVehicles to reopen against.
+  await refreshVehicles();
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
   vehicleRefreshTimer = setInterval(refreshVehicles, REFRESH_INTERVAL_MS);
   if (vehicleAnimationFrame) cancelAnimationFrame(vehicleAnimationFrame);
   vehicleAnimationFrame = requestAnimationFrame(animateVehicles);
+
+  if (restore?.veh.length > 0) {
+    for (const id of restore.veh) openVehicleDetail(id); // no-ops for a vehicle no longer running
+    selectTab(restore.active === "all" ? null : restore.active);
+  }
 }
 
 // Draws every line's route shapes + stop dots onto the fleet map, each in
@@ -1638,7 +1690,9 @@ async function drawFleetLines(linesByRef, guard) {
 // are still dead-reckoned in a straight line with no stop-approach braking,
 // and there's no incident notice. The recap below the map lists vehicles
 // per line (updateFleetStats) rather than per direction.
-async function openFleetMap(mode) {
+// restore: see openLineMap's own doc comment -- same idea, applied to the
+// fleet map's placeholder view and fit-to-vehicles behavior instead.
+async function openFleetMap(mode, restore = null) {
   const requestId = ++lineMapRequestId;
   document.getElementById("map-title").textContent = mode === "tram" ? "Tous les trams" : "Tous les bus";
   const statusEl = document.getElementById("map-status");
@@ -1674,15 +1728,22 @@ async function openFleetMap(mode) {
   const modeLines = lines.filter((line) => line.mode === mode);
   const linesById = new Map(modeLines.map((line) => [lineNumericId(line.ref), line]));
   currentFleetContext = { mode, linesById };
-  fleetMapBoundsFitted = false;
+  // Restoring a saved view already counts as "fitted" -- otherwise the
+  // first vehicle fetch below would immediately re-fit to every vehicle's
+  // coordinates and override the pan/zoom just restored.
+  fleetMapBoundsFitted = Boolean(restore);
   fleetStopPointsByRoute = new Map();
 
-  // Placeholder view (Bordeaux-wide) until the first vehicle fetch lands
-  // and refreshVehicles fits the view to every vehicle's own coordinates
-  // instead -- centerOnUserLocation isn't called automatically here (it
-  // would fight with that fit); the recenter button still calls it on
-  // demand.
-  map.setView([44.84, -0.58], 12);
+  if (restore) {
+    map.setView([restore.lat, restore.lng], restore.zoom, { animate: false });
+  } else {
+    // Placeholder view (Bordeaux-wide) until the first vehicle fetch lands
+    // and refreshVehicles fits the view to every vehicle's own coordinates
+    // instead -- centerOnUserLocation isn't called automatically here (it
+    // would fight with that fit); the recenter button still calls it on
+    // demand.
+    map.setView([44.84, -0.58], 12);
+  }
 
   // Only draw routes/stops for lines actually running right now, not the
   // full catalogue (~130+ bus lines, most idle at any given moment) --
@@ -1696,11 +1757,18 @@ async function openFleetMap(mode) {
     drawFleetLines(linesByRef, () => requestId === lineMapRequestId && currentFleetContext?.mode === mode);
   }
 
-  refreshVehicles();
+  // Awaited (rather than fire-and-forget like every later refresh) only so
+  // a saved vehicle detail tab below has activeVehicles to reopen against.
+  await refreshVehicles();
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
   vehicleRefreshTimer = setInterval(refreshVehicles, REFRESH_INTERVAL_MS);
   if (vehicleAnimationFrame) cancelAnimationFrame(vehicleAnimationFrame);
   vehicleAnimationFrame = requestAnimationFrame(animateVehicles);
+
+  if (restore?.veh.length > 0) {
+    for (const id of restore.veh) openVehicleDetail(id); // no-ops for a vehicle no longer running
+    selectTab(restore.active === "all" ? null : restore.active);
+  }
 }
 
 function closeLineMap() {
@@ -1806,7 +1874,10 @@ document.getElementById("back-from-map").addEventListener("click", () => {
   syncUrl(mapReturnScreen === "board" && currentStop ? { stop: currentStop.ref } : {});
 });
 
-document.getElementById("tab-vehicles").addEventListener("click", () => selectTab(null));
+document.getElementById("tab-vehicles").addEventListener("click", () => {
+  selectTab(null);
+  syncMapUrl();
+});
 
 for (const id of ["dir-0", "dir-1"]) {
   document.getElementById(id).addEventListener("change", (event) => {
@@ -1838,6 +1909,18 @@ document.getElementById("favorite-toggle").addEventListener("click", () => {
   updateFavoriteButton();
 });
 
+// Reads the map-view/detail-tabs part of syncMapUrl's own URL back out --
+// null when there's nothing to restore (a plain ?line=/?fleet= link with no
+// saved view yet, or one written before this existed).
+function parseMapRestore(params) {
+  const zoom = params.get("zoom");
+  const lat = params.get("lat");
+  const lng = params.get("lng");
+  if (zoom === null || lat === null || lng === null) return null;
+  const veh = params.get("veh");
+  return { zoom: Number(zoom), lat: Number(lat), lng: Number(lng), veh: veh ? veh.split(",") : [], active: params.get("active") };
+}
+
 async function init() {
   showScreen("search");
 
@@ -1857,14 +1940,14 @@ async function init() {
     const lines = await client.listLines();
     const line = lines.find((l) => l.ref === lineRef);
     if (line) {
-      openLineMap(lineAsPassage(line)); // refreshing a line map reopens the same line instead of losing it
+      openLineMap(lineAsPassage(line), parseMapRestore(params)); // refreshing a line map reopens the same line instead of losing it
       return;
     }
   }
 
   const fleetMode = params.get("fleet");
   if (fleetMode === "tram" || fleetMode === "bus") {
-    openFleetMap(fleetMode); // refreshing a fleet map reopens the same one instead of losing it
+    openFleetMap(fleetMode, parseMapRestore(params)); // refreshing a fleet map reopens the same one instead of losing it
     return;
   }
 
