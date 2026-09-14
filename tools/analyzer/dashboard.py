@@ -102,12 +102,23 @@ def build_index_html(*, hourly: list[dict], sessions: list[dict], comparisons: d
 </body></html>"""
 
 
+def _line_label(r: dict) -> str:
+    """"Tram A" colored like js/app.js's TRAM_LINE_COLORS badge; bus lines
+    stay plain text -- the site colors buses by category (from their name in
+    lines-discovery.json), which this pipeline doesn't have, so a per-line
+    bus color here would just be made up."""
+    if not r["is_tram"]:
+        return f"Bus {_esc(r['label'])}"
+    color = TRAM_PALETTE.get(r["label"], "#0a3d62")
+    return f'<span style="color:{color};font-weight:600">Tram {_esc(r["label"])}</span>'
+
+
 def _punctuality_line_table(rows: list[dict]) -> str:
     if not rows:
         return "<p class='muted'>Pas encore de donnees de ponctualite (necessite des sessions enregistrees depuis le 2026-09-11).</p>"
     trs = "".join(f"""
       <tr>
-        <td>{"Tram " if r["is_tram"] else "Bus "}{_esc(r["label"])}</td>
+        <td>{_line_label(r)}</td>
         <td>{r["n"]}</td>
         <td>{r["pct_ontime"]}%</td>
         <td>{r["avg_delay_min"]}</td>
