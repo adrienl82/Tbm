@@ -52,7 +52,11 @@ export async function fetchLineShapes(lineRef, { fetchImpl = null } = {}) {
 
   const url = new URL(BASE_URL);
   url.searchParams.set("dataset", DATASET);
-  url.searchParams.set("refine.rs_sv_ligne_a", id);
+  // SIRI/GTFS-RT zero-pad single- and double-digit line ids ("01" for
+  // Lianes 1), but this dataset's rs_sv_ligne_a field doesn't ("1") --
+  // without stripping the padding, every one-or-two-digit line silently
+  // gets zero shape records back.
+  url.searchParams.set("refine.rs_sv_ligne_a", id.replace(/^0+(?=\d)/, ""));
   // This dataset otherwise returns every stop-to-stop pair combination on
   // the line (not just consecutive ones), including ones that stray onto
   // a completely different line's real destinations -- "principal" is the
