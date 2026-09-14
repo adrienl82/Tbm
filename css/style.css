@@ -486,7 +486,7 @@ ul {
    actual box. Not clickable (see interactive:false where it's created), so
    it never steals taps meant for a stop or vehicle underneath. */
 .quartier-label {
-  color: #a3a3a3;
+  color: #9c8054;
   font-size: 0.6rem;
   font-weight: 600;
   letter-spacing: 0.02em;
