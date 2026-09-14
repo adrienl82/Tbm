@@ -1531,14 +1531,16 @@ async function openLineMap(passage) {
   // Fit to whichever points are actually trustworthy: the route when it
   // checked out, otherwise the stops so the map still lands on the line.
   // fitBounds on a whole line lands quite wide; nudge in a step so it opens
-  // closer to street level (still recenters on the user's location if geo
-  // resolves, keeping this zoom).
+  // closer to street level. Geolocation is only ever requested from the
+  // explicit recenter button now, never automatically on open -- the same
+  // call used to fire here too, silently requesting location on every
+  // single line opened (permission prompts, denials, and slow/failed fixes
+  // included) for a recenter the user hadn't asked for.
   const fitPoints = routeBounds.length > 0 ? routeBounds : stopPoints;
   if (fitPoints.length > 0) {
     map.fitBounds(fitPoints, { padding: [20, 20], animate: false });
     map.setZoom(Math.min(map.getMaxZoom(), map.getZoom() + LINE_FIT_ZOOM_IN), { animate: false });
   }
-  centerOnUserLocation(map);
 
   refreshVehicles();
   if (vehicleRefreshTimer) clearInterval(vehicleRefreshTimer);
