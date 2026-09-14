@@ -271,6 +271,24 @@ test("groupStopsByName unions the lineRefs served across a name's platforms", ()
   assert.deepEqual(group.lineRefs.sort(), ["liane-2", "tram-a"]);
 });
 
+test("groupStopsByName averages coordinates over platforms that have one", () => {
+  const stops = [
+    { ref: "a", name: "Quinconces", latitude: 44.0, longitude: -0.4, lineRefs: ["L2"] },
+    { ref: "b", name: "Quinconces", latitude: 44.2, longitude: -0.6, lineRefs: ["L2"] },
+    { ref: "c", name: "Quinconces", latitude: null, longitude: null, lineRefs: ["L2"] },
+  ];
+  const [group] = groupStopsByName(stops);
+  assert.equal(group.latitude, 44.1);
+  assert.equal(group.longitude, -0.5);
+});
+
+test("groupStopsByName leaves coordinates null when no platform has one", () => {
+  const stops = [{ ref: "a", name: "Depot ferme", latitude: null, longitude: null, lineRefs: [] }];
+  const [group] = groupStopsByName(stops);
+  assert.equal(group.latitude, null);
+  assert.equal(group.longitude, null);
+});
+
 test("TbmClient.searchStops is case-insensitive and caches the stop list", async () => {
   const storage = new MemoryStorage();
   let calls = 0;
@@ -345,6 +363,89 @@ test("TbmClient.searchStops filters by transport mode", async () => {
 
   const unfiltered = await client.searchStops("qu");
   assert.equal(unfiltered.length, 2);
+});
+
+test("TbmClient.nearbyStops sorts by distance and drops stops with no coordinates", async () => {
+  const stopsPayload = {
+    Siri: {
+      StopPointsDelivery: {
+        AnnotatedStopPointRef: [
+          {
+            StopPointRef: { value: "far" },
+            StopName: { value: "Loin" },
+            Location: { latitude: 44.9, longitude: -0.5 },
+            Lines: [{ value: "tram-a" }],
+          },
+          {
+            StopPointRef: { value: "near" },
+            StopName: { value: "Proche" },
+            Location: { latitude: 44.841, longitude: -0.571 },
+            Lines: [{ value: "tram-a" }],
+          },
+          {
+            StopPointRef: { value: "nowhere" },
+            StopName: { value: "Sans coordonnees" },
+            Location: {},
+            Lines: [{ value: "tram-a" }],
+          },
+        ],
+      },
+    },
+  };
+  const client = new TbmClient({
+    storage: new MemoryStorage(),
+    fetchImpl: async () => ({ ok: true, json: async () => stopsPayload }),
+  });
+
+  const results = await client.nearbyStops(44.84, -0.57);
+  assert.deepEqual(
+    results.map((s) => s.name),
+    ["Proche", "Loin"],
+  );
+  assert.ok(results[0].distanceMeters < results[1].distanceMeters);
+});
+
+test("TbmClient.nearbyStops filters by transport mode", async () => {
+  const stopsPayload = {
+    Siri: {
+      StopPointsDelivery: {
+        AnnotatedStopPointRef: [
+          {
+            StopPointRef: { value: "tram-stop" },
+            StopName: { value: "Quinconces" },
+            Location: { latitude: 44.84, longitude: -0.57 },
+            Lines: [{ value: "tram-a" }],
+          },
+          {
+            StopPointRef: { value: "bus-stop" },
+            StopName: { value: "Quatre Chemins" },
+            Location: { latitude: 44.841, longitude: -0.571 },
+            Lines: [{ value: "liane-2" }],
+          },
+        ],
+      },
+    },
+  };
+  const linesPayload = {
+    Siri: {
+      LinesDelivery: {
+        AnnotatedLineRef: [
+          { LineRef: { value: "tram-a" }, LineCode: { value: "A" }, LineName: [{ value: "Tram A" }] },
+          { LineRef: { value: "liane-2" }, LineCode: { value: "2" }, LineName: [{ value: "Lianes 2" }] },
+        ],
+      },
+    },
+  };
+  const client = new TbmClient({
+    storage: new MemoryStorage(),
+    fetchImpl: async (url) => ({
+      ok: true,
+      json: async () => (url.includes("lines-discovery") ? linesPayload : stopsPayload),
+    }),
+  });
+
+  const busOnly = await client.nearbyStops(44.84, -0.57, { modes: ["bus"] });
+  assert.deepEqual(busOnly.map((s) => s.name), ["Quatre Chemins"]);
 });
 
 test("TbmClient.stopMonitoring wires lines and stop-monitoring together", async () => {

@@ -199,6 +199,16 @@ ul {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.stop-distance {
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: nowrap;
 }
 
 .stop-row:first-child {

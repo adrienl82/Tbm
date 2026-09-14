@@ -201,10 +201,22 @@ function showScreen(name) {
   }
 }
 
+// distanceMeters is only present on results from nearbyStops() -- a plain
+// name search has nothing to measure distance from.
+function formatDistance(distanceMeters) {
+  return distanceMeters < 1000 ? `${Math.round(distanceMeters)} m` : `${(distanceMeters / 1000).toFixed(1)} km`;
+}
+
 function stopRowElement(stop, onSelect) {
   const li = document.createElement("li");
   li.className = "stop-row";
   li.textContent = stop.name;
+  if (stop.distanceMeters !== undefined) {
+    const distanceEl = document.createElement("span");
+    distanceEl.className = "stop-distance";
+    distanceEl.textContent = formatDistance(stop.distanceMeters);
+    li.appendChild(distanceEl);
+  }
   li.addEventListener("click", () => onSelect(stop));
   return li;
 }
@@ -366,6 +378,8 @@ function syncUrl(stopRef = null) {
 }
 
 async function runSearch(query) {
+  nearbyRequestId++; // discard any pending "nearby stops" geolocation fix
+  document.getElementById("search-status").textContent = "";
   if (!query.trim()) {
     await renderLinesBrowser();
     return;
@@ -377,6 +391,48 @@ async function runSearch(query) {
   for (const stop of stops) {
     resultsEl.appendChild(stopRowElement(stop, openBoard));
   }
+}
+
+// A request id guards against a stale fix landing after the user has since
+// typed a search or reopened this screen -- same pattern as geoRequestId
+// for the map's recenter button, but kept separate since the two are
+// otherwise unrelated (this one never touches a map at all).
+let nearbyRequestId = 0;
+
+function showNearbyStops() {
+  document.getElementById("search-input").value = "";
+  const resultsEl = document.getElementById("search-results");
+  const statusEl = document.getElementById("search-status");
+  resultsEl.classList.remove("lines-grid");
+  resultsEl.innerHTML = "";
+  statusEl.textContent = "Recherche de ta position...";
+
+  const requestId = ++nearbyRequestId;
+  if (!navigator.geolocation) {
+    statusEl.textContent = "Geolocalisation non disponible sur cet appareil.";
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      if (requestId !== nearbyRequestId) return;
+      const stops = await client.nearbyStops(position.coords.latitude, position.coords.longitude, {
+        modes: selectedModes(),
+      });
+      if (requestId !== nearbyRequestId) return;
+      statusEl.textContent = stops.length ? "" : "Aucun arret trouve a proximite.";
+      for (const stop of stops) {
+        resultsEl.appendChild(stopRowElement(stop, openBoard));
+      }
+    },
+    (err) => {
+      if (requestId !== nearbyRequestId) return;
+      statusEl.textContent =
+        err.code === err.PERMISSION_DENIED
+          ? "Localisation refusee pour ce site -- verifie les autorisations de position dans les reglages de ton navigateur."
+          : "Position indisponible pour le moment.";
+    },
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+  );
 }
 
 async function refreshBoard() {
@@ -1718,6 +1774,8 @@ for (const id of ["dir-0", "dir-1"]) {
 document.getElementById("recenter-button").addEventListener("click", () => {
   if (lineMap) centerOnUserLocation(lineMap);
 });
+
+document.getElementById("go-nearby").addEventListener("click", showNearbyStops);
 
 document.getElementById("go-favorites").addEventListener("click", async () => {
   showScreen("favorites");

@@ -7,7 +7,7 @@
 // API sends permissive CORS headers, so the browser can call it directly
 // with no backend in between.
 
-import { isValidCoordinate } from "./geoBounds.js";
+import { distanceMeters, isValidCoordinate } from "./geoBounds.js";
 
 export const BASE_URL = "https://bdx.mecatran.com/utw/ws/siri/2.0/bordeaux";
 export const ACCOUNT_KEY = "opendata-bordeaux-metropole-flux-gtfs-rt";
@@ -62,11 +62,20 @@ export function groupStopsByName(stops) {
   for (const points of byName.values()) {
     const active = points.filter((point) => point.lineRefs.length > 0);
     const members = (active.length > 0 ? active : points).slice().sort((a, b) => a.ref.localeCompare(b.ref));
+    // Averaged over whichever platforms have a valid fix rather than just
+    // picking members[0]'s -- a big square's platforms can sit a block or
+    // two apart, so this centers the group closer to the stop as a whole
+    // (used for "nearby stops", see nearbyStops()). null when none do.
+    const located = members.filter((point) => point.latitude !== null && point.longitude !== null);
+    const latitude = located.length > 0 ? located.reduce((sum, p) => sum + p.latitude, 0) / located.length : null;
+    const longitude = located.length > 0 ? located.reduce((sum, p) => sum + p.longitude, 0) / located.length : null;
     grouped.push({
       ref: members[0].ref,
       name: members[0].name,
       refs: members.map((point) => point.ref),
       lineRefs: [...new Set(members.flatMap((point) => point.lineRefs))],
+      latitude,
+      longitude,
     });
   }
   return grouped;
@@ -215,6 +224,27 @@ export class TbmClient {
     }
 
     return stops.sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit);
+  }
+
+  // Named stops (see groupStopsByName) closest to (latitude, longitude),
+  // nearest first, each carrying its own distanceMeters. modes filters like
+  // searchStops. Stops with no located platform at all (see
+  // groupStopsByName) are dropped -- there's no distance to sort them by.
+  async nearbyStops(latitude, longitude, { limit = 20, modes = null } = {}) {
+    let stops = await this.listStops();
+    stops = stops.filter((stop) => stop.latitude !== null && stop.longitude !== null);
+
+    if (modes && modes.length > 0) {
+      const linesByRef = await this._lines();
+      stops = stops.filter((stop) =>
+        stop.lineRefs.some((ref) => modes.includes(linesByRef.get(ref)?.mode)),
+      );
+    }
+
+    return stops
+      .map((stop) => ({ ...stop, distanceMeters: distanceMeters([latitude, longitude], [stop.latitude, stop.longitude]) }))
+      .sort((a, b) => a.distanceMeters - b.distanceMeters)
+      .slice(0, limit);
   }
 
   async _lines() {
