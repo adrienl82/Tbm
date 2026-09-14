@@ -1815,3 +1815,13 @@ async function init() {
 }
 
 init();
+
+// Registers the app-shell service worker (see sw.js) so the site becomes
+// installable and its own static files load instantly on a later visit --
+// never gates page functionality on this, since older/unsupporting
+// browsers must keep working exactly as before.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((err) => console.error("Service worker non enregistre :", err));
+  });
+}
