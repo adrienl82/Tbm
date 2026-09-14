@@ -139,6 +139,19 @@ test("fetchLineShapes queries the open data API by the line's numeric id", async
   assert.equal(parsed.searchParams.get("refine.principal"), "True");
 });
 
+test("fetchLineShapes queries the corrected pre-renumbering tag for lines the open data still files under their old id", async () => {
+  let requestedUrl = null;
+  await fetchLineShapes("bordeaux:Line:31:LOC", {
+    fetchImpl: async (url) => {
+      requestedUrl = url;
+      return { ok: true, json: async () => ({ records: [] }) };
+    },
+  });
+
+  const parsed = new URL(requestedUrl);
+  assert.equal(parsed.searchParams.get("refine.rs_sv_ligne_a"), "26");
+});
+
 test("fetchLineShapes strips the SIRI/GTFS-RT zero-padding before querying the open data API", async () => {
   let requestedUrl = null;
   await fetchLineShapes("bordeaux:Line:01:LOC", {

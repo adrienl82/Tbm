@@ -6,6 +6,7 @@
 // directly.
 
 import { isValidCoordinate } from "./geoBounds.js";
+import { LINE_SHAPE_OVERRIDES } from "./lineShapeOverrides.js";
 
 const BASE_URL = "https://opendata.bordeaux-metropole.fr/api/records/1.0/search/";
 const DATASET = "sv_chem_l";
@@ -56,7 +57,11 @@ export async function fetchLineShapes(lineRef, { fetchImpl = null } = {}) {
   // Lianes 1), but this dataset's rs_sv_ligne_a field doesn't ("1") --
   // without stripping the padding, every one-or-two-digit line silently
   // gets zero shape records back.
-  url.searchParams.set("refine.rs_sv_ligne_a", id.replace(/^0+(?=\d)/, ""));
+  const strippedId = id.replace(/^0+(?=\d)/, "");
+  // A good chunk of the network is filed under a stale pre-renumbering id
+  // instead (see lineShapeOverrides.js) -- use the corrected tag when one
+  // is known for this line.
+  url.searchParams.set("refine.rs_sv_ligne_a", LINE_SHAPE_OVERRIDES[strippedId] ?? strippedId);
   // This dataset otherwise returns every stop-to-stop pair combination on
   // the line (not just consecutive ones), including ones that stray onto
   // a completely different line's real destinations -- "principal" is the
